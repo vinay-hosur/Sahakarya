@@ -32,7 +32,7 @@ The four requested native modules were implemented and verified before this expa
 1. Define a provider-neutral context contract over projects, tasks, documents, decisions, comments, and external sources.
 2. Add an embedding provider interface and PostgreSQL pgvector storage only after checking local/deployment extension support.
 3. Extend lexical document retrieval into hybrid retrieval with permission filtering before ranking, deduplication, source links, and context/token budgets.
-4. Move provider adapters behind a separately injected interface and improve conflict/uncertainty handling.
+4. Move provider adapters behind a separately injected interface. Structured conflict and uncertainty handling is implemented and surfaced to users; improve its quality with evaluation fixtures.
 5. Continue improving task proposals with uncertainty/conflict handling, deduplication, and quality feedback. The first typed, cited, editable, human-approved project task workflow is implemented.
 
 Acceptance: answers about a project cite stored, permission-visible records and state uncertainty when evidence is missing.

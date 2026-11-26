@@ -9,8 +9,8 @@ Statuses: `Done` = implemented and verified at stated scope; `In progress` = act
 | --- | --- | --- | --- |
 | P0-01 | Inspect repository, source, models, migrations, tests, configs, and docs | Done | See `IMPLEMENTATION_AUDIT.md`; no rebuild performed. |
 | P0-02 | Diagnose API refusal and Docker Engine state | Done | Docker Desktop had not been started; its Engine pipe was unavailable. Started Docker Desktop 29.6.2. |
-| P0-03 | Validate PostgreSQL migrations | Done | PostgreSQL 17 healthy; migrations applied through `a91c5f7e2b40` (task history and workspace notifications). |
-| P0-04 | Start backend and frontend | Done | Full Docker stack runs PostgreSQL, API, and built UI; container health and proxied routes verified on 2026-11-27 after final rebuild. |
+| P0-03 | Validate PostgreSQL migrations | Done | PostgreSQL 17 healthy; migrations applied through `c4017e36ab92` (assistant evidence assessments). |
+| P0-04 | Start backend and frontend | Done | Full Docker stack runs PostgreSQL, API, and built UI; container health, evidence schema, and proxied routes verified on 2026-11-27 after final rebuild. |
 | P0-05 | Validate auth/workspace on PostgreSQL | Done | Temporary live register/session/list/create/read smoke passed; temporary rows removed. |
 | P0-06 | Execute automated checks | Done | Backend 59 tests passed; Ruff, format check, frontend lint/build, and Pages proxy assertions passed. See TEST_REPORT.md. |
 | P0-07 | Create implementation audit and maintain project docs | Done | `IMPLEMENTATION_AUDIT.md`, `API_DOCUMENTATION.md`, `INTEGRATION_GUIDE.md`, `TEST_REPORT.md`, `PRODUCT_ROADMAP.md` added; README/architecture updated. |
@@ -54,7 +54,7 @@ Statuses: `Done` = implemented and verified at stated scope; `In progress` = act
 | ID | Task | Status | Acceptance |
 | --- | --- | --- | --- |
 | P4-01 | Multi-provider reasoning adapters | Done | Configured OpenAI Responses, Anthropic Messages, or Gemini adapters can be selected; keys remain server-side. A separately injected adapter interface and usage accounting remain future work. |
-| P4-02 | Grounded answers, conflicts, and uncertainty | In progress | Existing strict schema/citation guard is baseline; add fact/interpretation/recommendation/unknown distinctions and conflict handling. |
+| P4-02 | Grounded answers, conflicts, and uncertainty | Done | Structured evidence assessments separate sourced facts, interpretations, recommendations, unknowns, and conflicts; nested citations are validated, persisted, and surfaced in the assistant and document-answer UI. Provider contract and API persistence tests pass. |
 | P4-03 | Structured native task proposals | Done | Project-scoped grounded context, strict provider schema, evidence citation validation, bounded suggestions, and no model-side write; tested with mocked provider responses. |
 | P4-04 | Usage/error tracking | Done | Persist input/output/total token usage when returned by the provider; configure connect/read timeouts; sanitize provider errors and surface quota failures. |
 | P4-05 | Persistent grounded workspace assistant and memory | Done | Shared chat, project selection, provider selector, native/external citations, workspace/project memory, role checks, audit events, migrations, and mocked provider tests. |
@@ -90,6 +90,6 @@ Statuses: `Done` = implemented and verified at stated scope; `In progress` = act
 | ID | Task | Status | Acceptance |
 | --- | --- | --- | --- |
 | P8-01 | Reproducible setup and native demo guide | In progress | README provides setup and a full native walkthrough. No seeded workspace is shipped; create demo records in the signed-in workspace. |
-| P8-02 | Deployment and operational hardening | In progress | Free deployment path configured for one Render API, Neon Free PostgreSQL, and Cloudflare Pages with REST/WebSocket proxy; locally validated. Public provisioning still needs signed-in Neon, Render, and Cloudflare accounts; free-tier sleep/quota limits and backup/monitoring/rate-limit hardening remain. |
+| P8-02 | Deployment and operational hardening | In progress | Free deployment path configured for one Render API in Ohio, the existing Neon Free database in Ohio, and Cloudflare Pages with REST/WebSocket proxy; locally validated. Accounts are ready; live provisioning is in progress. Free-tier sleep/quota limits and backup/monitoring/rate-limit hardening remain. |
 | P8-03 | Expand critical tests and real smoke-test report | Done | 59 backend tests, Ruff, frontend lint/build, Pages proxy assertions, migration head, Docker health, and local PostgreSQL HTTP workflows are recorded in TEST_REPORT.md. Live external-provider tests remain unperformed. |
 

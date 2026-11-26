@@ -1,7 +1,7 @@
 # Test report
 
 **Run date:** 2026-11-27  
-**Scope:** Native collaboration, task dependency/history, notifications and mentions, file ingestion/search, workspace AI assistant with provider selection and persistent memory, and managed-host deployment preparation.
+**Scope:** Native collaboration, task dependency/history, notifications and mentions, file ingestion/search, workspace AI assistant with provider selection, persistent memory and structured evidence assessments, and free-host deployment preparation.
 
 ## Automated checks actually executed
 
@@ -13,8 +13,8 @@
 | `cd frontend; npm run lint` | Passed (oxlint). |
 | `cd frontend; npm run build` | Passed (TypeScript project build and Vite production bundle). |
 | Cloudflare Pages proxy assertions (Node) | Passed: upstream path/query, session cookie, browser origin, forwarded host/protocol, and rejection of an insecure API origin. |
-| PostgreSQL migration at API startup | Passed against PostgreSQL 17; applied `a91c5f7e2b40`. |
-| `docker compose exec api uv run alembic current` | `a91c5f7e2b40` (head). |
+| PostgreSQL migration at API startup | Passed against PostgreSQL 17; applied `c4017e36ab92`. |
+| `docker compose exec api uv run alembic current` | `c4017e36ab92` (head). |
 | Docker Compose health checks | PostgreSQL, API, and web containers healthy after final rebuild. |
 | Docker HTTP smoke | Web root, `/health/ready`, and `/api/v1/meta` returned successfully; OpenAPI includes the task-proposal route; Alembic is at migration head. |
 
@@ -33,18 +33,18 @@
 - Notification tests cover assignment and comment events, chat @email mentions, recipient-only visibility, mark-one/read-all behavior, and unread filtering.
 - Configuration tests verify Render/Postgres URLs select psycopg 3 and the Slack callback can be derived from the public frontend URL.
 - Slack integration tests verify OAuth URL/state creation, hash-only state storage, one-time callback validation, mocked code exchange, encrypted token persistence, MCP discovery, safe API output, token revocation on disconnect, and audit events. They do not contact a live Slack workspace.
-- Assistant tests cover provider selection, grounded response persistence/citations, shared memory lifecycle, viewer restrictions, audit records, and the unconfigured-provider response. Provider adapter contract tests use mocked OpenAI/Anthropic/Gemini responses.
+- Assistant tests cover provider selection, grounded response persistence/citations, facts/interpretations/recommendations/unknowns/conflicts, nested evidence citation validation, shared memory lifecycle, viewer restrictions, audit records, and the unconfigured-provider response. Provider adapter contract tests use mocked OpenAI/Anthropic/Gemini responses.
 - Task-proposal tests cover strict provider schema and usage parsing, reject unknown citations, map valid citations to project evidence, and verify drafts do not create tasks until the user submits a task through the native API.
 
 ## Live local application and PostgreSQL checks
 
 - `GET /health/ready` returned `{"status":"ready","dependencies":{"database":"available"}}`.
 - Frontend root at `http://localhost:8080/` returned HTTP 200 from the running Docker stack.
-- The applied PostgreSQL migration head is `a91c5f7e2b40`; task labels/dependencies/history and recipient-scoped notifications, as well as OAuth state, assistant usage, memory, and file/chunk tables, are present through Alembic.
+- The applied PostgreSQL migration head is `c4017e36ab92`; task labels/dependencies/history, recipient-scoped notifications, OAuth state, assistant usage/memory/evidence, and file/chunk tables are present through Alembic.
 - A temporary account used the running API to upload a Markdown file, read its extracted document metadata, retrieve a lexical search hit, and download the original bytes. The temporary workspace and account were removed after the smoke check.
 - A PostgreSQL WebSocket smoke check also verified authenticated chat presence and realtime message delivery alongside stored message history.
 - A separate temporary owner/member pair exercised invitations, task assignment, task comments, chat mentions, notification retrieval, and read-all against the running PostgreSQL-backed API. The temporary workspaces and accounts were removed after verification.
-- The free deployment configuration is prepared for Render API + Neon PostgreSQL + Cloudflare Pages. The Cloudflare proxy route and Pages routing manifest were checked locally. The hosted services have not been provisioned; signed-in provider accounts are still required.
+- The free deployment configuration is prepared for Render API + Neon PostgreSQL + Cloudflare Pages. The Cloudflare proxy route and Pages routing manifest were checked locally. The user has signed in to the free provider accounts; live resource provisioning is underway.
 - A live model smoke request returned a provider usage-limit response. The API now reports that condition without exposing provider response contents or credentials; successful synthesis still depends on restored provider quota. Assistant and grounded-answer contract tests use mocked provider responses.
 
 ## Limits of these checks

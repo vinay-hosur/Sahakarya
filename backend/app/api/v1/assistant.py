@@ -76,6 +76,7 @@ class AssistantMessageView(BaseModel):
     provider: str | None
     model: str | None
     citations: list[CitationView]
+    evidence_assessment: dict | None
     usage: dict[str, int] | None
     created_at: datetime
 
@@ -169,6 +170,7 @@ def _message_view(db: Session, message: AssistantMessage) -> AssistantMessageVie
         provider=message.provider,
         model=message.model,
         citations=[CitationView.model_validate(item) for item in (message.citations_json or [])],
+        evidence_assessment=message.evidence_json,
         usage=message.usage_json,
         created_at=message.created_at,
     )
@@ -484,6 +486,7 @@ async def send_message(
         model=answer["model"],
         citations_json=citations,
         usage_json=answer.get("usage"),
+        evidence_json=answer.get("evidence_assessment"),
         created_at=now + timedelta(microseconds=1),
     )
     db.add(assistant_message)

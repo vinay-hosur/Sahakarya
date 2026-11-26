@@ -5,20 +5,20 @@ This setup uses one free Render API service, Neon Free PostgreSQL, and Cloudflar
 ## Free-tier limits
 
 - Render Free web services sleep after 15 minutes without traffic and usually take about a minute to wake. One service consumes the 750 monthly free instance hours for a workspace, so this guide deploys one API service. The free service has limited CPU and memory and is intended for demos and low traffic, not an always-on production SLA. See [Render's free instance limits](https://render.com/docs/free).
-- Neon Free currently provides 100 compute-hours and 1 GB storage per project. Create the database in Singapore (`ap-southeast-1`) to keep it near the Render service. Monitor usage and export important data yourself; this plan is not a managed production backup guarantee. See [Neon's free plan details](https://neon.com/blog/neon-free-plan-1-gb-per-project).
+- Neon Free currently provides 100 compute-hours and 1 GB storage per project. Keep the database and API in the same region to reduce database latency. Monitor usage and export important data yourself; this plan is not a managed production backup guarantee. See [Neon's free plan details](https://neon.com/blog/neon-free-plan-1-gb-per-project).
 - Cloudflare Workers/Pages Functions have a 100,000 request/day Free limit and a 10 ms CPU limit per request. The proxy mostly waits on network I/O. See [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/). Cloudflare supports WebSocket proxying through `fetch`; see [WebSocket connections](https://developers.cloudflare.com/workers/runtime-apis/websockets/).
 - Model providers, Slack, and GitHub set their own account, quota, and billing terms. Hosting for this app does not include AI inference credits.
 
 ## 1. Create a persistent free database
 
-1. Create a Neon account and a project in Singapore (`ap-southeast-1`).
-2. Create/select the project database and copy its **pooled** connection string. Keep it private. It may begin with `postgresql://`; the API normalizes it to the installed psycopg 3 SQLAlchemy driver.
+1. Use the existing Neon Free project in Ohio shown in your signed-in account. The Render API is set to Ohio so it can stay near that database.
+2. Select the production branch/database and copy its **pooled** connection string. Keep it private. It may begin with `postgresql://`; the API normalizes it to the installed psycopg 3 SQLAlchemy driver.
 3. Do not use Render's free PostgreSQL for this deployment: that database expires after 30 days.
 
 ## 2. Deploy the API on Render Free
 
 1. Push this repository to GitHub and connect it to Render.
-2. In Render, choose **New → Blueprint**, select this repository, and review `render.yaml`. It creates one Docker web service named `sahakarya-api` in Singapore on the Free plan.
+2. In Render, choose **New → Blueprint**, select this repository, and review `render.yaml`. It creates one Docker web service named `sahakarya-api` in Ohio on the Free plan.
 3. In the service's Environment settings, set `DATABASE_URL` to the Neon pooled connection string. Keep Render's generated `INTEGRATION_ENCRYPTION_KEY`; losing or rotating it makes saved connector credentials unreadable.
 4. Deploy and wait for `/health/ready` to pass. The container runs Alembic migrations before starting FastAPI. Copy the public API service URL, such as `https://sahakarya-api.onrender.com`.
 

@@ -4,6 +4,14 @@ import { apiBaseUrl } from './api'
 type Project = { id: string; name: string }
 type Provider = { id: string; label: string; model: string }
 type Citation = { id: string; title: string; provider: string; source_url: string | null }
+type EvidenceClaim = { statement: string; citations: string[] }
+export type EvidenceAssessment = {
+  facts: EvidenceClaim[]
+  interpretations: EvidenceClaim[]
+  recommendations: EvidenceClaim[]
+  unknowns: string[]
+  conflicts: { topic: string; views: EvidenceClaim[] }[]
+}
 type Message = {
   id: string
   role: 'user' | 'assistant'
@@ -12,6 +20,7 @@ type Message = {
   provider: string | null
   model: string | null
   citations: Citation[]
+  evidence_assessment: EvidenceAssessment | null
   created_at: string
 }
 type Memory = {
@@ -32,6 +41,27 @@ function errorDetail(payload: unknown, fallback: string) {
 
 function shortDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value))
+}
+
+function EvidenceLinks({ ids, citations }: { ids: string[]; citations: Citation[] }) {
+  const sources = ids.map((id) => citations.find((citation) => citation.id === id)).filter((item): item is Citation => Boolean(item))
+  if (!sources.length) return null
+  return <span className="assistant-evidence-links">{sources.map((citation) => citation.source_url?.startsWith('http')
+    ? <a key={citation.id} href={citation.source_url} target="_blank" rel="noreferrer">{citation.title}</a>
+    : <a key={citation.id} href="#knowledge">{citation.title}</a>)}</span>
+}
+
+export function EvidenceBreakdown({ assessment, citations }: { assessment: EvidenceAssessment; citations: Citation[] }) {
+  const hasEvidence = assessment.facts.length + assessment.interpretations.length + assessment.recommendations.length + assessment.unknowns.length + assessment.conflicts.length > 0
+  if (!hasEvidence) return null
+  return <details className="assistant-evidence-breakdown">
+    <summary>Evidence breakdown</summary>
+    {assessment.facts.length > 0 && <section><h4>Facts</h4><ul>{assessment.facts.map((claim, index) => <li key={`fact-${index}`}>{claim.statement}<EvidenceLinks ids={claim.citations} citations={citations} /></li>)}</ul></section>}
+    {assessment.interpretations.length > 0 && <section><h4>Interpretations</h4><ul>{assessment.interpretations.map((claim, index) => <li key={`interpretation-${index}`}>{claim.statement}<EvidenceLinks ids={claim.citations} citations={citations} /></li>)}</ul></section>}
+    {assessment.recommendations.length > 0 && <section><h4>Recommendations</h4><ul>{assessment.recommendations.map((claim, index) => <li key={`recommendation-${index}`}>{claim.statement}<EvidenceLinks ids={claim.citations} citations={citations} /></li>)}</ul></section>}
+    {assessment.unknowns.length > 0 && <section><h4>Unknowns</h4><ul>{assessment.unknowns.map((unknown, index) => <li key={`unknown-${index}`}>{unknown}</li>)}</ul></section>}
+    {assessment.conflicts.length > 0 && <section><h4>Conflicting evidence</h4>{assessment.conflicts.map((conflict, index) => <div className="assistant-evidence-conflict" key={`conflict-${index}`}><strong>{conflict.topic}</strong><ul>{conflict.views.map((view, viewIndex) => <li key={`view-${viewIndex}`}>{view.statement}<EvidenceLinks ids={view.citations} citations={citations} /></li>)}</ul></div>)}</section>}
+  </details>
 }
 
 export default function AssistantPanel({
@@ -175,6 +205,7 @@ export default function AssistantPanel({
             {messages.map((message) => <article key={message.id} className={`assistant-message ${message.role}`}>
               <div className="assistant-message-meta"><strong>{message.role === 'assistant' ? 'SAHAKARYA' : message.author_display_name || 'Workspace member'}</strong><time>{shortDate(message.created_at)}</time>{message.provider && <span>{message.provider} · {message.model}</span>}</div>
               <p>{message.content}</p>
+              {message.evidence_assessment && <EvidenceBreakdown assessment={message.evidence_assessment} citations={message.citations} />}
               {message.citations.length > 0 && <div className="assistant-citations"><span>Evidence</span>{message.citations.map((citation) => citation.source_url?.startsWith('http')
                 ? <a key={citation.id} href={citation.source_url} target="_blank" rel="noreferrer">{citation.title} ↗</a>
                 : <a key={citation.id} href="#knowledge">{citation.title} · {citation.provider}</a>)}</div>}

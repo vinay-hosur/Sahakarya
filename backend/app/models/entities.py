@@ -686,6 +686,7 @@ class AssistantMessage(Timestamped, Base):
     model: Mapped[str | None] = mapped_column(String(160))
     citations_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     usage_json: Mapped[dict | None] = mapped_column(JSON)
+    evidence_json: Mapped[dict | None] = mapped_column(JSON)
 
 
 class AssistantMemory(Timestamped, Base):

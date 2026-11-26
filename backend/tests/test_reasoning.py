@@ -20,6 +20,37 @@ def test_structured_reasoning_validates_source_ids_and_keeps_provider_data_bound
     model_output = {
         "answer": "The team chose a staged migration with a compatibility window.",
         "citations": [str(source_id)],
+        "evidence_assessment": {
+            "facts": [
+                {
+                    "statement": "The team chose a staged migration.",
+                    "citations": [str(source_id)],
+                }
+            ],
+            "interpretations": [
+                {
+                    "statement": "A staged rollout reduces migration risk.",
+                    "citations": [str(source_id)],
+                }
+            ],
+            "recommendations": [],
+            "unknowns": ["The exact rollout dates are not recorded."],
+            "conflicts": [
+                {
+                    "topic": "Compatibility window",
+                    "views": [
+                        {
+                            "statement": "Compatibility is required for two releases.",
+                            "citations": [str(source_id)],
+                        },
+                        {
+                            "statement": "The schedule does not identify release dates.",
+                            "citations": [str(source_id)],
+                        },
+                    ],
+                }
+            ],
+        },
         "needs_more_context": False,
         "action_title": "Document the API migration plan",
         "action_description": "Capture the staged rollout and its compatibility window.",
@@ -78,6 +109,10 @@ def test_structured_reasoning_validates_source_ids_and_keeps_provider_data_bound
     assert result["usage"] == {"input_tokens": 34, "output_tokens": 12, "total_tokens": 46}
     assert result["citation_ids"] == [str(source_id)]
     assert result["suggested_action"]["title"] == model_output["action_title"]
+    assert (
+        result["evidence_assessment"]["unknowns"] == model_output["evidence_assessment"]["unknowns"]
+    )
+    assert result["evidence_assessment"]["conflicts"][0]["topic"] == "Compatibility window"
     assert captured["url"] == "https://api.openai.com/v1/responses"
     assert captured["body"]["store"] is False
     assert captured["body"]["text"]["format"]["strict"] is True
@@ -89,9 +124,17 @@ def test_structured_reasoning_validates_source_ids_and_keeps_provider_data_bound
 
 def test_structured_reasoning_rejects_unknown_citation(monkeypatch) -> None:
     known_source_id = uuid4()
+    unknown_source_id = uuid4()
     model_output = {
         "answer": "A plausible answer.",
-        "citations": [str(uuid4())],
+        "citations": [str(known_source_id)],
+        "evidence_assessment": {
+            "facts": [{"statement": "Unsupported detail.", "citations": [str(unknown_source_id)]}],
+            "interpretations": [],
+            "recommendations": [],
+            "unknowns": [],
+            "conflicts": [],
+        },
         "needs_more_context": False,
         "action_title": "",
         "action_description": "",
@@ -161,6 +204,18 @@ def test_reasoning_adapters_send_provider_specific_requests(
     output = {
         "answer": "The workspace uses a staged rollout.",
         "citations": [str(source_id)],
+        "evidence_assessment": {
+            "facts": [
+                {
+                    "statement": "The workspace uses a staged rollout.",
+                    "citations": [str(source_id)],
+                }
+            ],
+            "interpretations": [],
+            "recommendations": [],
+            "unknowns": [],
+            "conflicts": [],
+        },
         "needs_more_context": False,
         "action_title": "",
         "action_description": "",

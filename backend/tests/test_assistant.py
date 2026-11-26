@@ -70,6 +70,20 @@ def test_workspace_assistant_persists_grounded_messages_and_manageable_memory(mo
                 "The onboarding notes describe token refresh and the team’s compatibility rule."
             ),
             "citation_ids": [str(sources[0].id)] if sources else [],
+            "evidence_assessment": {
+                "facts": [
+                    {
+                        "statement": "The project notes describe the current session policy.",
+                        "citations": [str(sources[0].id)],
+                    }
+                ]
+                if sources
+                else [],
+                "interpretations": [],
+                "recommendations": [],
+                "unknowns": [] if sources else ["No project evidence is available."],
+                "conflicts": [],
+            },
             "needs_more_context": not sources,
             "usage": {"input_tokens": 42, "output_tokens": 18, "total_tokens": 60},
             "suggested_action": None,
@@ -122,6 +136,9 @@ def test_workspace_assistant_persists_grounded_messages_and_manageable_memory(mo
         assert sent.json()["provider"] == "openai"
         assert sent.json()["usage"]["total_tokens"] == 60
         assert sent.json()["citations"][0]["title"] == "Onboarding notes"
+        assert sent.json()["evidence_assessment"]["facts"][0]["citations"] == [
+            document.json()["id"]
+        ]
         assert captured["provider"] == "openai"
         assert captured["history"] == []
         assert any(source.provider == "workspace_memory" for source in captured["sources"])
@@ -131,6 +148,9 @@ def test_workspace_assistant_persists_grounded_messages_and_manageable_memory(mo
         assert [message["role"] for message in history.json()] == ["user", "assistant"]
         assert history.json()[0]["author_display_name"] == "Assistant Owner"
         assert history.json()[1]["citations"][0]["id"] == document.json()["id"]
+        assert history.json()[1]["evidence_assessment"]["facts"][0]["statement"].startswith(
+            "The project notes"
+        )
         assert history.json()[1]["usage"]["input_tokens"] == 42
         memories = await client.get(f"{base}/memories", params={"project_id": project_id})
         assert [memory["id"] for memory in memories.json()] == [memory_id]

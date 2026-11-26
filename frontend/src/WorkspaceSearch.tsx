@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { apiBaseUrl } from './api'
+import { EvidenceBreakdown, type EvidenceAssessment } from './AssistantPanel'
 
 type Project = { id: string; name: string }
 type Provider = { id: string; label: string; model: string }
@@ -19,6 +20,7 @@ type SearchAnswer = {
   answer: {
     answer: string
     citation_ids: string[]
+    evidence_assessment?: EvidenceAssessment
     needs_more_context: boolean
     provider: string
     model: string
@@ -98,6 +100,12 @@ export default function WorkspaceSearch({ workspaceId, projects, providers, defa
   }
 
   const citedResults = answer ? results.filter((result) => answer.citation_ids.includes(result.document_id)) : []
+  const evidenceCitations = citedResults.map((result) => ({
+    id: result.document_id,
+    title: result.title,
+    provider: 'native_document',
+    source_url: null,
+  }))
   return (
     <section className="workspace-search" aria-labelledby="workspace-search-title">
       <div className="section-heading">
@@ -112,7 +120,7 @@ export default function WorkspaceSearch({ workspaceId, projects, providers, defa
       </form>
       <p className="workspace-search-privacy">“Ask AI from excerpts” sends up to 8 matched passages to the selected model provider. Plain document search stays in SAHAKARYA.</p>
       {detail && <p className="workspace-search-status" role="status">{detail}</p>}
-      {answer && <article className="workspace-search-answer"><span className="card-kicker">GROUNDED ANSWER · {answer.model}</span><p>{answer.answer}</p>{answer.needs_more_context && <strong>More document evidence may be needed to answer this fully.</strong>}{citedResults.length > 0 && <div className="workspace-answer-citations"><strong>Sources</strong>{citedResults.map((result) => <a key={result.document_id} href={`#knowledge`}>{result.title}{result.source_filename ? ` · ${result.source_filename}` : ''}</a>)}</div>}</article>}
+      {answer && <article className="workspace-search-answer"><span className="card-kicker">GROUNDED ANSWER · {answer.model}</span><p>{answer.answer}</p>{answer.needs_more_context && <strong>More document evidence may be needed to answer this fully.</strong>}{answer.evidence_assessment && <EvidenceBreakdown assessment={answer.evidence_assessment} citations={evidenceCitations} />}{citedResults.length > 0 && <div className="workspace-answer-citations"><strong>Sources</strong>{citedResults.map((result) => <a key={result.document_id} href={`#knowledge`}>{result.title}{result.source_filename ? ` · ${result.source_filename}` : ''}</a>)}</div>}</article>}
       {results.length > 0 && <div className="workspace-search-results" aria-label="Matching document passages">{results.map((result) => <article className="workspace-search-result" key={`${result.document_id}:${result.excerpt}`}><div><strong>{result.title}</strong><span>{result.category}{result.source_filename ? ` · ${result.source_filename}` : ''}</span></div><p>{result.excerpt}</p></article>)}</div>}
     </section>
   )
