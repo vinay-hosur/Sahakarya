@@ -195,6 +195,12 @@ def test_structured_reasoning_rejects_unknown_citation(monkeypatch) -> None:
             "gemini_model",
             "https://generativelanguage.googleapis.com/v1beta/models/test-model:generateContent",
         ),
+        (
+            "groq",
+            "groq_api_key",
+            "groq_model",
+            "https://api.groq.com/openai/v1/responses",
+        ),
     ],
 )
 def test_reasoning_adapters_send_provider_specific_requests(
@@ -228,6 +234,12 @@ def test_reasoning_adapters_send_provider_specific_requests(
 
         def json(self):
             text = json.dumps(output)
+            if provider == "groq":
+                return {
+                    "status": "completed",
+                    "usage": {"input_tokens": 20, "output_tokens": 8},
+                    "output_text": text,
+                }
             if provider == "anthropic":
                 return {
                     "content": [{"type": "text", "text": text}],
@@ -278,7 +290,11 @@ def test_reasoning_adapters_send_provider_specific_requests(
     assert result["citation_ids"] == [str(source_id)]
     assert result["usage"]["total_tokens"] == 28
     assert captured["url"] == url
-    if provider == "anthropic":
+    if provider == "groq":
+        assert captured["headers"]["Authorization"] == "Bearer provider-secret"
+        assert "store" not in captured["body"]
+        assert captured["body"]["text"]["format"]["strict"] is True
+    elif provider == "anthropic":
         assert captured["headers"]["x-api-key"] == "provider-secret"
         assert captured["body"]["messages"][0]["role"] == "user"
     else:

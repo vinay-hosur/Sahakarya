@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     anthropic_model: str | None = None
     gemini_api_key: SecretStr | None = None
     gemini_model: str | None = None
+    groq_api_key: SecretStr | None = None
+    groq_model: str | None = None
     default_reasoning_provider: str | None = None
     reasoning_connect_timeout_seconds: int = 10
     reasoning_read_timeout_seconds: int = 60
@@ -82,6 +84,7 @@ class Settings(BaseSettings):
             ("openai", "OpenAI", self.openai_api_key, self.openai_model),
             ("anthropic", "Anthropic", self.anthropic_api_key, self.anthropic_model),
             ("gemini", "Google Gemini", self.gemini_api_key, self.gemini_model),
+            ("groq", "Groq", self.groq_api_key, self.groq_model),
         )
         return [
             {"id": provider_id, "label": label, "model": model.strip()}
@@ -103,6 +106,7 @@ class Settings(BaseSettings):
             "openai": (self.openai_api_key, self.openai_model),
             "anthropic": (self.anthropic_api_key, self.anthropic_model),
             "gemini": (self.gemini_api_key, self.gemini_model),
+            "groq": (self.groq_api_key, self.groq_model),
         }
         values = fields.get(provider_id or "")
         if not values:

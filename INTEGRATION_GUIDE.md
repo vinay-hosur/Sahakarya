@@ -36,7 +36,7 @@ The scopes must also be allowed by your app configuration. Confirm the callback 
 
 ## Optional multi-provider reasoning
 
-Grounded synthesis is optional. Set an API key and model for OpenAI, Anthropic, and/or Gemini in the backend environment, then restart the API. The keys stay on the server. Without a configured provider, the application still supports native lexical search and source evidence. A live provider call returned a provider usage-limit response in the latest smoke check; successful synthesis requires an active provider quota.
+Grounded synthesis is optional. Set an API key and model for OpenAI, Anthropic, Gemini, and/or Groq in the backend environment, then restart the API. The keys stay on the server. Without a configured provider, the application still supports native lexical search and source evidence. Groq is integrated through its Responses API; see its [rate limits](https://console.groq.com/docs/rate-limits) and [supported structured output models](https://console.groq.com/docs/structured-outputs) before selecting a model. Exact quotas vary by account and model. Successful synthesis requires an active provider quota.
 
 ## Verification boundary
 
