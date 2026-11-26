@@ -1,0 +1,1 @@
+"""SAHAKARYA backend application package."""

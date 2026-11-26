@@ -1,0 +1,146 @@
+import asyncio
+from collections.abc import Awaitable, Callable
+from uuid import UUID
+
+import httpx
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.db.base import Base
+from app.db.session import get_db
+from app.main import app
+from app.models.entities import AuditEvent, ChatMessage, WorkspaceMember
+
+
+async def _exercise_api(
+    action: Callable[[httpx.AsyncClient, sessionmaker], Awaitable[None]],
+) -> None:
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    test_sessions = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    def override_get_db():
+        with test_sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await action(client, test_sessions)
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+async def _register(client: httpx.AsyncClient, email: str, name: str) -> dict:
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "display_name": name, "password": "correct-horse-battery-staple"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_workspace_chat_persists_messages_and_enforces_viewer_read_only() -> None:
+    async def scenario(client: httpx.AsyncClient, sessions: sessionmaker) -> None:
+        owner = await _register(client, "chat-owner@example.com", "Chat Owner")
+        workspace_id = owner["workspaces"][0]["id"]
+        base = f"/api/v1/workspaces/{workspace_id}/chat"
+        created = await client.post(f"{base}/channels", json={"name": "#general"})
+        assert created.status_code == 201, created.text
+        channel = created.json()
+        assert channel["name"] == "general"
+
+        sent = await client.post(
+            f"{base}/channels/{channel['id']}/messages", json={"body": "Welcome to the team."}
+        )
+        assert sent.status_code == 201, sent.text
+        assert sent.json()["sender_display_name"] == "Chat Owner"
+        history = await client.get(f"{base}/channels/{channel['id']}/messages")
+        assert history.status_code == 200
+        assert [row["body"] for row in history.json()] == ["Welcome to the team."]
+
+        invite = await client.post(
+            f"/api/v1/workspaces/{workspace_id}/invitations",
+            json={"email": "chat-viewer@example.com", "role": "viewer"},
+        )
+        assert invite.status_code == 201
+        await client.post("/api/v1/auth/logout")
+        viewer = await _register(client, "chat-viewer@example.com", "Chat Viewer")
+        await client.post(
+            "/api/v1/workspaces/invitations/accept", json={"token": invite.json()["token"]}
+        )
+        assert (await client.get(f"{base}/channels/{channel['id']}/messages")).status_code == 200
+        denied = await client.post(
+            f"{base}/channels/{channel['id']}/messages", json={"body": "Viewer write"}
+        )
+        assert denied.status_code == 403
+
+        with sessions() as db:
+            saved = db.scalars(select(ChatMessage)).all()
+            event_types = db.scalars(select(AuditEvent.event_type)).all()
+            assert len(saved) == 1 and saved[0].sender_user_id == UUID(owner["user"]["id"])
+            assert "chat.channel_created" in event_types
+            assert "chat.message_created" in event_types
+            assert viewer["user"]["email"] == "chat-viewer@example.com"
+
+    asyncio.run(_exercise_api(scenario))
+
+
+def test_workspace_chat_mentions_notify_only_the_named_member() -> None:
+    async def scenario(client: httpx.AsyncClient, sessions: sessionmaker) -> None:
+        owner = await _register(client, "mention-owner@example.com", "Mention Owner")
+        workspace_id = owner["workspaces"][0]["id"]
+        await client.post("/api/v1/auth/logout")
+        teammate = await _register(client, "teammate@example.com", "Mention Teammate")
+        with sessions() as db:
+            db.add(
+                WorkspaceMember(
+                    workspace_id=UUID(workspace_id),
+                    user_id=UUID(teammate["user"]["id"]),
+                    role="member",
+                )
+            )
+            db.commit()
+
+        await client.post("/api/v1/auth/logout")
+        await client.post(
+            "/api/v1/auth/login",
+            json={"email": owner["user"]["email"], "password": "correct-horse-battery-staple"},
+        )
+        chat_base = f"/api/v1/workspaces/{workspace_id}/chat"
+        channel = await client.post(f"{chat_base}/channels", json={"name": "general"})
+        assert channel.status_code == 201
+        sent = await client.post(
+            f"{chat_base}/channels/{channel.json()['id']}/messages",
+            json={"body": "@teammate@example.com please review the release notes"},
+        )
+        assert sent.status_code == 201
+
+        await client.post("/api/v1/auth/logout")
+        login = await client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": teammate["user"]["email"],
+                "password": "correct-horse-battery-staple",
+            },
+        )
+        assert login.status_code == 200
+        notification_base = f"/api/v1/workspaces/{workspace_id}/notifications"
+        unread = await client.get(f"{notification_base}?unread_only=true")
+        assert unread.status_code == 200
+        assert len(unread.json()) == 1
+        notification = unread.json()[0]
+        assert notification["event_type"] == "mention"
+        assert "Mention Owner mentioned you in #general" == notification["title"]
+        marked = await client.patch(f"{notification_base}/{notification['id']}/read")
+        assert marked.status_code == 200
+        assert marked.json()["read_at"] is not None
+        assert (await client.get(f"{notification_base}?unread_only=true")).json() == []
+
+    asyncio.run(_exercise_api(scenario))
