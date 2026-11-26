@@ -275,7 +275,7 @@ class DocumentSearchQuery(BaseModel):
     query: str = Field(min_length=2, max_length=1000)
     project_id: UUID | None = None
     limit: int = Field(default=10, ge=1, le=20)
-    provider: str | None = Field(default=None, pattern="^(openai|anthropic|gemini|groq)$")
+    provider: str | None = Field(default=None, pattern="^(openai|anthropic|gemini|groq|xai)$")
 
     @field_validator("query")
     @classmethod

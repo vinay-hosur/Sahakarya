@@ -201,6 +201,12 @@ def test_structured_reasoning_rejects_unknown_citation(monkeypatch) -> None:
             "groq_model",
             "https://api.groq.com/openai/v1/responses",
         ),
+        (
+            "xai",
+            "xai_api_key",
+            "xai_model",
+            "https://api.x.ai/v1/responses",
+        ),
     ],
 )
 def test_reasoning_adapters_send_provider_specific_requests(
@@ -234,7 +240,7 @@ def test_reasoning_adapters_send_provider_specific_requests(
 
         def json(self):
             text = json.dumps(output)
-            if provider == "groq":
+            if provider in {"groq", "xai"}:
                 return {
                     "status": "completed",
                     "usage": {"input_tokens": 20, "output_tokens": 8},
@@ -290,7 +296,7 @@ def test_reasoning_adapters_send_provider_specific_requests(
     assert result["citation_ids"] == [str(source_id)]
     assert result["usage"]["total_tokens"] == 28
     assert captured["url"] == url
-    if provider == "groq":
+    if provider in {"groq", "xai"}:
         assert captured["headers"]["Authorization"] == "Bearer provider-secret"
         assert "store" not in captured["body"]
         assert captured["body"]["text"]["format"]["strict"] is True

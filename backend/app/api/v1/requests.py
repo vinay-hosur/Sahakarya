@@ -26,7 +26,11 @@ from app.services.context_retrieval import (
     relevance_score,
     retrieve_from_integration,
 )
-from app.services.reasoning import ReasoningUnavailable, reason_over_context
+from app.services.reasoning import (
+    MAX_REASONING_CONTEXT_CHARACTERS,
+    ReasoningUnavailable,
+    reason_over_context,
+)
 
 logger = logging.getLogger("sahakarya.requests")
 router = APIRouter(prefix="/workspaces/{workspace_id}/requests", tags=["context requests"])
@@ -34,7 +38,7 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/requests", tags=["context 
 
 class RequestCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=2000)
-    provider: str | None = Field(default=None, pattern="^(openai|anthropic|gemini|groq)$")
+    provider: str | None = Field(default=None, pattern="^(openai|anthropic|gemini|groq|xai)$")
 
     @field_validator("prompt")
     @classmethod
@@ -346,7 +350,7 @@ async def create_request(
     sources: list[ContextSource] = []
     total_characters = 0
     for rank, (integration, item) in enumerate(ranked, start=1):
-        if total_characters + len(item.content_text) > 50000:
+        if total_characters + len(item.content_text) > MAX_REASONING_CONTEXT_CHARACTERS:
             break
         total_characters += len(item.content_text)
         score = relevance_score(payload.prompt, item.content_text)

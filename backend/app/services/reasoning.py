@@ -11,7 +11,8 @@ from app.models.entities import UserRequest
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 GROQ_RESPONSES_URL = "https://api.groq.com/openai/v1/responses"
-MAX_REASONING_CONTEXT_CHARACTERS = 24000
+XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
+MAX_REASONING_CONTEXT_CHARACTERS = 100_000
 logger = logging.getLogger(__name__)
 EVIDENCE_CLAIM_SCHEMA = {
     "type": "object",
@@ -340,7 +341,7 @@ async def reason_over_context(
         response_payload = response.json()
         if not isinstance(response_payload, dict):
             raise ReasoningUnavailable("Reasoning provider returned an invalid response")
-        if provider_id in {"openai", "groq"} and response_payload.get("status") not in (
+        if provider_id in {"openai", "groq", "xai"} and response_payload.get("status") not in (
             None,
             "completed",
         ):
@@ -507,7 +508,7 @@ async def propose_native_tasks(
         response_payload = response.json()
         if not isinstance(response_payload, dict):
             raise ReasoningUnavailable("Reasoning provider returned an invalid response")
-        if provider_id in {"openai", "groq"} and response_payload.get("status") not in (
+        if provider_id in {"openai", "groq", "xai"} and response_payload.get("status") not in (
             None,
             "completed",
         ):
@@ -573,7 +574,7 @@ async def propose_native_tasks(
 
 def _provider_usage(provider: str, payload: dict) -> dict[str, int] | None:
     total = None
-    if provider in {"openai", "groq"}:
+    if provider in {"openai", "groq", "xai"}:
         raw = payload.get("usage", {})
         fields = {
             "input_tokens": raw.get("input_tokens"),
@@ -617,7 +618,7 @@ def _provider_body(
     schema_name: str = "sahakarya_grounded_context",
     max_output_tokens: int = 1200,
 ) -> dict:
-    if provider in {"openai", "groq"}:
+    if provider in {"openai", "groq", "xai"}:
         body = {
             "model": model,
             "instructions": instructions,
@@ -667,6 +668,8 @@ def _provider_request(provider: str, api_key: str, model: str) -> tuple[str, dic
         )
     if provider == "groq":
         return GROQ_RESPONSES_URL, {"Authorization": f"Bearer {api_key}"}
+    if provider == "xai":
+        return XAI_RESPONSES_URL, {"Authorization": f"Bearer {api_key}"}
     if provider == "gemini":
         return (
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -676,7 +679,7 @@ def _provider_request(provider: str, api_key: str, model: str) -> tuple[str, dic
 
 
 def _provider_response_text(provider: str, payload: dict) -> str:
-    if provider in {"openai", "groq"}:
+    if provider in {"openai", "groq", "xai"}:
         return _response_text(payload)
     if provider == "anthropic":
         for block in payload.get("content", []):

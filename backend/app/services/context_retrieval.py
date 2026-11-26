@@ -34,7 +34,7 @@ GITHUB_SEARCH_TOOLS = {"search_issues", "search_code", "search_pull_requests"}
 MAX_SEARCH_TOOLS_PER_PROVIDER = 2
 MAX_CONTEXT_ITEMS = 20
 MAX_ITEM_CHARACTERS = 5000
-MAX_TOTAL_CHARACTERS = 50000
+MAX_TOTAL_CHARACTERS = 100_000
 STOP_WORDS = {
     "about",
     "after",
