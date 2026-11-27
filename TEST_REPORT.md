@@ -1,9 +1,9 @@
 # Test report
 
 **Run date:** 2026-11-27  
-**Revision state:** Local working tree; these changes have not yet been deployed.
+**Published revision:** `a2d46c6` on `main`.
 
-## Checks run on this working tree
+## Checks run on this revision
 
 | Command/check | Result |
 | --- | --- |
@@ -12,8 +12,16 @@
 | `cd backend; uv run ruff format --check app tests` | Passed: 53 files formatted. |
 | `cd frontend; npm run lint` | Passed (oxlint). |
 | `cd frontend; npm run build` | Passed (TypeScript and Vite production build). |
-| Alembic PostgreSQL offline SQL generation | Passed for the full chain; one merged head: `d8e37fbc6a21`. No database was contacted or modified by this check. |
+| Alembic PostgreSQL offline SQL generation | Passed for the full chain; one merged head: `d8e37fbc6a21`. |
 | `git diff --check` | Passed. |
+
+## Deployment smoke checks
+
+- Render API `https://sahakarya-api.onrender.com/health/ready`: HTTP 200; PostgreSQL reported available.
+- Render OpenAPI: HTTP 200, 62 paths, including Telegram connect/status/groups/webhook and invitation resend.
+- Render `/api/v1/meta`: HTTP 200; runtime reports Gemini `gemini-3.1-flash-lite` and xAI `grok-4.3` configured, with Gemini selected by default. This verifies configuration presence, not a successful live model completion.
+- Cloudflare Pages `https://sahakarya.pages.dev/`: HTTP 200 and serves the new frontend bundle (`index-Vy3wkJ0X.js`).
+- The Render container runs `alembic upgrade head` before Uvicorn. The new API reached ready and exposed the new routes after deployment.
 
 ## Automated coverage
 
@@ -22,16 +30,13 @@
 - Uploads: supported PDF/DOCX/Markdown/TXT extraction, metadata, download, lexical indexing, 50 MiB bound, and mocked R2 storage for large files.
 - Telegram: mocked Bot API validation, webhook secret checking, group discovery/association, duplicate delivery, assistant evidence retrieval, and disconnect preservation.
 - GitHub: mocked REST retrieval of repository metadata, README, file tree, and selected source/configuration files; count/list retrieval remains covered.
-- Workspace overview data: workspace descriptions are created, read, and updated through authenticated APIs. The UI uses actual member and audit activity endpoints.
-- Existing project, task, decision, notification, AI provider contract, citation, and reviewed-action tests remain in the suite.
+- Workspace overview data: workspace descriptions are created, read, and updated through authenticated APIs. The UI uses real member and audit activity endpoints.
+- Existing project, task, decision, notification, AI-provider contract, citation, and reviewed-action tests remain in the suite.
 
-## Not verified against live services
+## Still needs service setup or live verification
 
-- No live Render deployment or production database migration was run for this local change set.
-- No real R2 upload, Resend email, Telegram bot/webhook, GitHub repository token, or Slack OAuth operation was performed. The corresponding automated integration tests use mocks or local test servers.
-- The 50 MiB limit is enforced in the application, but uploads above 5 MiB require the four R2 settings in Render. The 50 MiB path is tested with a mocked object-storage adapter, not a real bucket.
+- Runtime metadata reports `object_storage_configured: false`. Files above 5 MiB are rejected until the four Cloudflare R2 settings are added to Render. The 50 MiB path is tested with a mocked object-storage adapter, not a real bucket.
+- Runtime metadata reports `invitation_email_configured: false`. Invitations work as secure copyable links; automatic email requires Resend settings.
+- No real Telegram bot token/webhook, R2 upload, Resend email, GitHub repository token, or Slack OAuth operation was exercised. The automated integration paths use mocks or local test servers.
 - Telegram captures new eligible text/caption messages after a group is enabled. It does not import group history; BotFather privacy and group permissions control which updates Telegram sends.
-- Uploads use a single request and are not resumable. OCR and semantic/vector document search are not implemented. Chat real-time fan-out remains single-process; polling is the client fallback.
-- Invitation email requires `RESEND_API_KEY` and `INVITATION_FROM_EMAIL`; otherwise the application provides a secure invitation link for manual sharing.
-
-The earlier deployed baseline was verified separately in the previous report. It must not be taken as evidence that this uncommitted working tree is already live.
+- Uploads use one request and are not resumable. OCR and semantic/vector document search are not implemented. Chat real-time fan-out remains single-process; polling is the client fallback.
