@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID
 
 import httpx
+from pydantic import SecretStr
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -12,7 +13,7 @@ from app.api.v1 import documents as documents_api
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models.entities import AuditEvent, WorkspaceMember
+from app.models.entities import AuditEvent, KnowledgeDocumentFile, WorkspaceMember
 
 
 async def _exercise_api(
@@ -347,3 +348,63 @@ def test_markdown_upload_download_search_answer_and_audit(monkeypatch) -> None:
         await scenario(client, sessions)
 
     asyncio.run(_exercise_api(invoke))
+
+
+def test_upload_rejects_over_5_mib_until_object_storage_is_configured() -> None:
+    async def scenario(client: httpx.AsyncClient, _: sessionmaker) -> None:
+        workspace_id = await _register(client, "large-upload-owner@example.com")
+        payload = b" " * (5 * 1024 * 1024 + 1)
+        response = await client.post(
+            f"/api/v1/workspaces/{workspace_id}/documents/upload",
+            files={"file": ("large.txt", payload, "text/plain")},
+        )
+        assert response.status_code == 503
+        assert "Cloudflare R2" in response.json()["detail"]
+
+    asyncio.run(_exercise_api(scenario))
+
+
+def test_50_mib_upload_uses_object_storage_and_downloads_from_it(monkeypatch) -> None:
+    monkeypatch.setattr(documents_api.settings, "file_storage_endpoint", "https://account.r2.test")
+    monkeypatch.setattr(documents_api.settings, "file_storage_bucket", "sahakarya-test")
+    monkeypatch.setattr(documents_api.settings, "file_storage_access_key_id", "test-access")
+    monkeypatch.setattr(
+        documents_api.settings,
+        "file_storage_secret_access_key",
+        SecretStr("test-secret"),
+    )
+    uploaded: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        documents_api,
+        "upload_object",
+        lambda key, content, content_type: uploaded.append((key, len(content), content_type)),
+    )
+    monkeypatch.setattr(documents_api, "download_object", lambda _key: b"retrieved from R2")
+    monkeypatch.setattr(
+        documents_api,
+        "_extract_file",
+        lambda _filename, _content: ("Indexed content from the uploaded text file.", "text/plain"),
+    )
+
+    async def scenario(client: httpx.AsyncClient, sessions: sessionmaker) -> None:
+        workspace_id = await _register(client, "r2-upload-owner@example.com")
+        base = f"/api/v1/workspaces/{workspace_id}/documents"
+        file_bytes = b"x" * (50 * 1024 * 1024)
+        response = await client.post(
+            f"{base}/upload",
+            files={"file": ("large.txt", file_bytes, "text/plain")},
+        )
+        assert response.status_code == 201, response.text
+        document_id = response.json()["id"]
+        assert uploaded and uploaded[0][1] == 50 * 1024 * 1024
+        with sessions() as db:
+            stored = db.get(KnowledgeDocumentFile, UUID(document_id))
+            assert stored is not None
+            assert stored.file_content is None
+            assert stored.storage_key == uploaded[0][0]
+            assert stored.file_size == 50 * 1024 * 1024
+        downloaded = await client.get(f"{base}/{document_id}/file")
+        assert downloaded.status_code == 200
+        assert downloaded.content == b"retrieved from R2"
+
+    asyncio.run(_exercise_api(scenario))

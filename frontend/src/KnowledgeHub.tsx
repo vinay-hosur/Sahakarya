@@ -31,6 +31,9 @@ type DocumentComment = {
   created_at: string
 }
 
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+const DATABASE_UPLOAD_LIMIT_BYTES = 5 * 1024 * 1024
+
 async function request(path: string, init: RequestInit = {}) {
   return fetch(`${apiBaseUrl}${path}`, {
     ...init,
@@ -59,12 +62,14 @@ export default function KnowledgeHub({
   userId,
   isWorkspaceOwner,
   canWrite,
+  objectStorageConfigured,
 }: {
   workspaceId: string
   projects: Project[]
   userId: string
   isWorkspaceOwner: boolean
   canWrite: boolean
+  objectStorageConfigured: boolean
 }) {
   const [documents, setDocuments] = useState<Document[]>([])
   const [selectedId, setSelectedId] = useState('')
@@ -76,6 +81,7 @@ export default function KnowledgeHub({
   const [detailsMessage, setDetailsMessage] = useState('')
   const [editing, setEditing] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
 
   const endpoint = `/api/v1/workspaces/${workspaceId}/documents`
   const selected = documents.find((document) => document.id === selectedId) || null
@@ -177,13 +183,37 @@ export default function KnowledgeHub({
       setMessage('Choose a PDF, DOCX, Markdown, or TXT file first.')
       return
     }
+    if (selectedFile.size > MAX_UPLOAD_BYTES) {
+      setMessage('Files must be 50 MiB or smaller.')
+      return
+    }
+    if (!objectStorageConfigured && selectedFile.size > DATABASE_UPLOAD_LIMIT_BYTES) {
+      setMessage('Files above 5 MiB need Cloudflare R2 storage. Ask the workspace administrator to finish file storage setup.')
+      return
+    }
     setBusy(true)
     setUploading(true)
-    setMessage('Extracting and indexing document…')
+    setUploadProgress(0)
+    setMessage('Uploading file…')
     try {
-      const response = await request(`${endpoint}/upload`, { method: 'POST', body: values })
-      const payload = await response.json()
-      if (!response.ok) throw new Error(messageFrom(payload, 'Could not upload document.'))
+      const payload = await new Promise<unknown>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', `${apiBaseUrl}${endpoint}/upload`)
+        xhr.withCredentials = true
+        xhr.setRequestHeader('Accept', 'application/json')
+        xhr.upload.onprogress = (progress) => {
+          if (progress.lengthComputable) setUploadProgress(Math.round((progress.loaded / progress.total) * 100))
+        }
+        xhr.onload = () => {
+          let responsePayload: unknown = {}
+          try { responsePayload = JSON.parse(xhr.responseText) as unknown } catch { /* handled below */ }
+          if (xhr.status >= 200 && xhr.status < 300) resolve(responsePayload)
+          else reject(new Error(messageFrom(responsePayload, `Upload failed (${xhr.status}).`)))
+        }
+        xhr.onerror = () => reject(new Error('The upload connection was interrupted. Try again; incomplete uploads are discarded.'))
+        xhr.onabort = () => reject(new Error('Upload was cancelled.'))
+        xhr.send(values)
+      })
       const document = payload as Document
       setDocuments((current) => [document, ...current])
       setSelectedId(document.id)
@@ -194,6 +224,7 @@ export default function KnowledgeHub({
     } finally {
       setBusy(false)
       setUploading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -270,13 +301,14 @@ export default function KnowledgeHub({
         <button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Create document'}</button>
       </form>}
       {canWrite && <form className="knowledge-upload-form" onSubmit={(event) => void uploadDocument(event)}>
-        <div><strong>Import a file</strong><span>PDF, DOCX, Markdown, or TXT · up to 5 MiB · text extraction only</span></div>
+        <div><strong>Import a file</strong><span>PDF, DOCX, Markdown, or TXT · up to 50 MiB{objectStorageConfigured ? ' · Cloudflare R2 storage ready' : ' · up to 5 MiB until object storage is configured'} · text extraction only</span></div>
         <label>File<input name="file" type="file" accept=".pdf,.docx,.md,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" required /></label>
         <label>Title override<input name="title" maxLength={240} placeholder="Defaults to the filename" /></label>
         <label>Category<input name="category" maxLength={100} defaultValue="General" required /></label>
         <label>Project<select name="project_id" defaultValue=""><option value="">Workspace document</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
         <label>Tags<input name="tags" maxLength={500} placeholder="architecture, onboarding" /></label>
-        <button type="submit" disabled={busy}>{uploading ? 'Importing…' : 'Upload and index'}</button>
+        {uploading && <div className="upload-progress"><progress max={100} value={uploadProgress} aria-label="File upload progress" /><span>{uploadProgress}% uploaded · indexing starts after transfer</span></div>}
+        <button type="submit" disabled={busy}>{uploading ? 'Uploading and indexing…' : 'Upload and index'}</button>
       </form>}
       {message && <p className="knowledge-message" role="status">{message}</p>}
       <div className="knowledge-layout">

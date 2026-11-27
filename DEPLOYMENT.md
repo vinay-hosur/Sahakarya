@@ -19,10 +19,10 @@ This setup uses one free Render API service, Neon Free PostgreSQL, and Cloudflar
 
 1. Push this repository to GitHub and connect it to Render.
 2. In Render, choose **New → Blueprint**, select this repository, and review `render.yaml`. It creates one Docker web service named `sahakarya-api` in Ohio on the Free plan.
-3. In the service's Environment settings, set `DATABASE_URL` to the Neon pooled connection string. Keep Render's generated `INTEGRATION_ENCRYPTION_KEY`; losing or rotating it makes saved connector credentials unreadable.
+3. In the service's Environment settings, set `DATABASE_URL` to the Neon pooled connection string. Keep Render's generated `INTEGRATION_ENCRYPTION_KEY`; losing or rotating it makes saved connector credentials unreadable. `PUBLIC_API_URL` is set to `https://sahakarya-api.onrender.com` in the Blueprint and must match the service's actual public origin for Telegram webhooks.
 4. Deploy and wait for `/health/ready` to pass. The container runs Alembic migrations before starting FastAPI. Copy the public API service URL, such as `https://sahakarya-api.onrender.com`.
 
-The API's first request after a sleep may be slow. The API has no local persistent disk dependency: workspace records, uploaded file bytes, extracted text, and search chunks are in PostgreSQL.
+The API's first request after a sleep may be slow. The API has no local persistent disk dependency. Workspace records, extracted text, and search chunks are in PostgreSQL. With no R2 configuration, original uploads above 5 MiB are rejected and smaller uploads use legacy PostgreSQL blob storage.
 
 ## 3. Deploy the UI and same-origin proxy on Cloudflare Pages
 
@@ -34,8 +34,8 @@ The API's first request after a sleep may be slow. The API has no local persiste
 
 ## 4. Set the public origin and check the app
 
-1. In Render's API Environment settings, set `CORS_ORIGINS` to the exact Pages origin, with no trailing slash (for example, `https://sahakarya.pages.dev`).
-2. Set `SLACK_FRONTEND_URL` to that same Pages origin. The Slack callback will be `https://sahakarya.pages.dev/api/v1/integrations/slack/oauth/callback`, and Cloudflare Pages forwards it to the API.
+1. In Render's API Environment settings, set `CORS_ORIGINS`, `PUBLIC_APP_URL`, and `SLACK_FRONTEND_URL` to the exact Pages origin, with no trailing slash (for example, `https://sahakarya.pages.dev`).
+2. `PUBLIC_API_URL` must be the API's public HTTPS origin (for example, `https://sahakarya-api.onrender.com`). The Slack callback will be `https://sahakarya.pages.dev/api/v1/integrations/slack/oauth/callback`, and Cloudflare Pages forwards it to the API.
 3. Redeploy/restart the API after changing its environment.
 4. Visit the Pages URL. Register the workspace owner, then check sign-in, create a project and task, upload/search a small file, post a chat message, and confirm the notification feed works.
 
@@ -44,7 +44,23 @@ The API's first request after a sleep may be slow. The API has no local persiste
 - Add AI provider key/model pairs as Render API environment secrets (`OPENAI_API_KEY`/`OPENAI_MODEL`, `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`, or `GEMINI_API_KEY`/`GEMINI_MODEL`). Choose a provider whose account has an available quota. Never put keys in GitHub, chat, browser storage, or `VITE_` variables.
 - GitHub: create a narrowly scoped fine-grained token for the intended repository, enable only required repository and Issues permissions, then connect it in **Integrations**. Confirm reads before approving a real issue write.
 - Slack: create a Slack app, set `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, and any required `SLACK_USER_SCOPES` in Render, and register the exact Pages callback URL from step 4. Connect a test workspace and verify authorized channel access.
+- Telegram: create a bot using [BotFather](https://t.me/BotFather) and connect its token in **Integrations**. The token is encrypted at rest. Add the bot to a group, adjust privacy via BotFather's `/setprivacy` if it must receive normal group messages, then send a new message so the group appears for explicit workspace/project association. Only new messages received after association are saved; the Bot API does not provide historical group-message sync.
 - Keep Render's generated `INTEGRATION_ENCRYPTION_KEY` stable. Integration tokens are encrypted in the database using this key.
+
+### Optional: 50 MiB file uploads with Cloudflare R2
+
+To allow files larger than the 5 MiB PostgreSQL fallback limit, create an R2 bucket and S3 API credentials in Cloudflare. Add these variables to the Render API service:
+
+- `FILE_STORAGE_ENDPOINT`: `https://<account-id>.r2.cloudflarestorage.com`
+- `FILE_STORAGE_BUCKET`: the bucket name
+- `FILE_STORAGE_ACCESS_KEY_ID`: the R2 access key ID
+- `FILE_STORAGE_SECRET_ACCESS_KEY`: the R2 secret access key
+
+The API stores the original object in R2 and records its object key and metadata in PostgreSQL. New uploads use R2 whenever it is configured. The per-file limit is 50 MiB. Upload progress and transfer errors are shown in the UI; uploads use a single request and are not resumable. Check [current R2 pricing and free usage limits](https://developers.cloudflare.com/r2/pricing/) before relying on a no-cost quota.
+
+### Optional: invitation email through Resend
+
+Verify a sender address/domain with Resend, then set `RESEND_API_KEY` and `INVITATION_FROM_EMAIL` in Render. The invitation workflow remains usable without email: the owner can copy the secure, one-time link and send it using another channel. The invited user must sign in with the matching email before accepting.
 
 ## Operational limits
 

@@ -92,6 +92,56 @@ def test_workspace_chat_persists_messages_and_enforces_viewer_read_only() -> Non
     asyncio.run(_exercise_api(scenario))
 
 
+def test_invited_workspace_members_exchange_persistent_chat_messages() -> None:
+    async def scenario(client: httpx.AsyncClient, sessions: sessionmaker) -> None:
+        owner = await _register(client, "chat-exchange-owner@example.com", "Chat Owner")
+        workspace_id = owner["workspaces"][0]["id"]
+        invite = await client.post(
+            f"/api/v1/workspaces/{workspace_id}/invitations",
+            json={"email": "chat-exchange-member@example.com", "role": "member"},
+        )
+        assert invite.status_code == 201, invite.text
+        channel = await client.post(
+            f"/api/v1/workspaces/{workspace_id}/chat/channels", json={"name": "general"}
+        )
+        assert channel.status_code == 201, channel.text
+        channel_id = channel.json()["id"]
+        chat_path = f"/api/v1/workspaces/{workspace_id}/chat/channels/{channel_id}/messages"
+        owner_message = await client.post(chat_path, json={"body": "Welcome to the project."})
+        assert owner_message.status_code == 201, owner_message.text
+
+        await client.post("/api/v1/auth/logout")
+        member = await _register(client, "chat-exchange-member@example.com", "Chat Member")
+        accepted = await client.post(
+            "/api/v1/workspaces/invitations/accept", json={"token": invite.json()["token"]}
+        )
+        assert accepted.status_code == 200, accepted.text
+        owner_history = await client.get(chat_path)
+        assert [message["body"] for message in owner_history.json()] == ["Welcome to the project."]
+        member_message = await client.post(chat_path, json={"body": "Thanks, I can see it."})
+        assert member_message.status_code == 201, member_message.text
+
+        await client.post("/api/v1/auth/logout")
+        await client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": owner["user"]["email"],
+                "password": "correct-horse-battery-staple",
+            },
+        )
+        refreshed_history = await client.get(chat_path)
+        assert [message["body"] for message in refreshed_history.json()] == [
+            "Welcome to the project.",
+            "Thanks, I can see it.",
+        ]
+        assert refreshed_history.json()[1]["sender_user_id"] == member["user"]["id"]
+        with sessions() as db:
+            saved = db.scalars(select(ChatMessage)).all()
+            assert len(saved) == 2
+
+    asyncio.run(_exercise_api(scenario))
+
+
 def test_workspace_chat_mentions_notify_only_the_named_member() -> None:
     async def scenario(client: httpx.AsyncClient, sessions: sessionmaker) -> None:
         owner = await _register(client, "mention-owner@example.com", "Mention Owner")

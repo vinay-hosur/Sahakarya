@@ -22,3 +22,19 @@ services:
         value: "true"
       - key: INTEGRATION_ENCRYPTION_KEY
         generateValue: true
+      - key: FILE_STORAGE_ENDPOINT
+        sync: false
+      - key: FILE_STORAGE_BUCKET
+        sync: false
+      - key: FILE_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: FILE_STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: INVITATION_FROM_EMAIL
+        sync: false
+      - key: PUBLIC_APP_URL
+        value: https://sahakarya.pages.dev
+      - key: PUBLIC_API_URL
+        value: https://sahakarya-api.onrender.com

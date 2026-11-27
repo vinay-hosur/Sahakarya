@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.auth import current_user
@@ -19,6 +19,8 @@ from app.models.entities import (
     DecisionRecord,
     Project,
     TaskItem,
+    TelegramChat,
+    TelegramMessage,
     User,
     WorkspaceMember,
 )
@@ -280,6 +282,42 @@ def _workspace_evidence(
                 )
             )
             seen.add(item.id)
+
+    telegram_query = (
+        select(TelegramMessage, TelegramChat)
+        .join(TelegramChat, TelegramChat.id == TelegramMessage.chat_id)
+        .where(
+            TelegramMessage.workspace_id == workspace_id,
+            TelegramChat.status.in_(["connected", "paused"]),
+        )
+    )
+    if project_id is not None:
+        telegram_query = telegram_query.where(
+            or_(TelegramMessage.project_id.is_(None), TelegramMessage.project_id == project_id)
+        )
+    telegram_rows = db.execute(
+        telegram_query.order_by(TelegramMessage.message_at.desc()).limit(120)
+    ).all()
+    ranked_telegram = []
+    for message, chat in telegram_rows:
+        content = (
+            f"Telegram group: {chat.title}\nSender: {message.sender_name}\n"
+            f"Sent: {message.message_at.isoformat()}\nMessage: {message.content}"
+        )
+        ranked_telegram.append((relevance_score(prompt, content), message, chat, content))
+    ranked_telegram.sort(key=lambda item: (item[0], item[1].message_at), reverse=True)
+    for score, message, chat, content in ranked_telegram[:6]:
+        if score > 0 and message.id not in seen:
+            sources.append(
+                _source(
+                    message.id,
+                    "telegram",
+                    f"{chat.title} · {message.sender_name}",
+                    content,
+                    message.source_url,
+                )
+            )
+            seen.add(message.id)
 
     return sources[:24]
 

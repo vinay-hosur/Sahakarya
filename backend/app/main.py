@@ -23,6 +23,8 @@ from app.api.v1.notifications import router as notifications_router
 from app.api.v1.projects import router as projects_router
 from app.api.v1.requests import router as requests_router
 from app.api.v1.tasks import router as tasks_router
+from app.api.v1.telegram import public_router as telegram_public_router
+from app.api.v1.telegram import router as telegram_router
 from app.api.v1.workspaces import router as workspaces_router
 from app.core.config import settings
 from app.core.request_context import request_id_context
@@ -106,6 +108,8 @@ app.include_router(assistant_router, prefix=settings.api_v1_prefix)
 app.include_router(chat_router, prefix=settings.api_v1_prefix)
 app.include_router(members_router, prefix=settings.api_v1_prefix)
 app.include_router(notifications_router, prefix=settings.api_v1_prefix)
+app.include_router(telegram_router, prefix=settings.api_v1_prefix)
+app.include_router(telegram_public_router, prefix=settings.api_v1_prefix)
 app.include_router(integrations_router, prefix=settings.api_v1_prefix)
 app.include_router(integrations_oauth_router, prefix=settings.api_v1_prefix)
 app.include_router(requests_router, prefix=settings.api_v1_prefix)

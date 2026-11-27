@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import xml.etree.ElementTree as ElementTree
 from datetime import datetime
@@ -24,8 +25,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from pypdf import PdfReader
 from sqlalchemy import String, cast, delete, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.auth import current_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.entities import (
     AuditEvent,
@@ -38,13 +41,16 @@ from app.models.entities import (
     User,
     WorkspaceMember,
 )
+from app.services.file_storage import delete_object, download_object, upload_object
 from app.services.reasoning import ReasoningUnavailable, reason_over_context
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/documents", tags=["knowledge documents"])
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+DATABASE_UPLOAD_LIMIT_BYTES = 5 * 1024 * 1024
 MAX_EXTRACTED_CHARACTERS = 100_000
 CHUNK_WORDS = 300
 CHUNK_OVERLAP_WORDS = 60
+logger = logging.getLogger("sahakarya.documents")
 
 
 def _tags(values: list[str]) -> list[str]:
@@ -314,7 +320,7 @@ def _workspace_role(db: Session, workspace_id: UUID, user_id: UUID, *, write: bo
     )
     if role is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if role not in {"owner", "member", "viewer"}:
+    if role not in {"owner", "admin", "member", "viewer"}:
         raise HTTPException(status_code=403, detail="Workspace role is invalid")
     if write and role == "viewer":
         raise HTTPException(status_code=403, detail="Viewer access is read-only")
@@ -346,7 +352,7 @@ def _document(db: Session, workspace_id: UUID, document_id: UUID) -> KnowledgeDo
 def _can_edit_document(
     db: Session, document: KnowledgeDocument, user_id: UUID, workspace_role: str
 ) -> bool:
-    return workspace_role == "owner" or document.owner_user_id == user_id
+    return workspace_role in {"owner", "admin"} or document.owner_user_id == user_id
 
 
 def _document_view(db: Session, document: KnowledgeDocument) -> DocumentView:
@@ -594,7 +600,15 @@ async def upload_document(
     if not file_content:
         raise HTTPException(status_code=422, detail="The selected file is empty.")
     if len(file_content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Files must be 5 MiB or smaller.")
+        raise HTTPException(status_code=413, detail="Files must be 50 MiB or smaller.")
+    if len(file_content) > DATABASE_UPLOAD_LIMIT_BYTES and not settings.object_storage_configured:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Files above 5 MiB require Cloudflare R2 object storage. "
+                "Ask the administrator to finish the file-storage setup."
+            ),
+        )
     content, content_type = _extract_file(original_filename, file_content)
     clean_title = (title or "").strip() or PurePosixPath(original_filename).stem.strip()
     if len(clean_title) < 2:
@@ -616,38 +630,64 @@ async def upload_document(
         tags=clean_tags,
         version_number=1,
     )
-    db.add(document)
-    db.flush()
-    db.add(
-        KnowledgeDocumentFile(
-            document_id=document.id,
-            workspace_id=workspace_id,
-            original_filename=original_filename,
-            content_type=content_type,
-            file_size=len(file_content),
-            sha256=hashlib.sha256(file_content).hexdigest(),
-            file_content=file_content,
-            uploaded_by=user.id,
+    storage_key = None
+    if settings.object_storage_configured:
+        digest = hashlib.sha256(file_content).hexdigest()
+        storage_key = f"workspaces/{workspace_id}/documents/{document.id}/{digest}"
+        try:
+            await run_in_threadpool(upload_object, storage_key, file_content, content_type)
+        except Exception as exc:
+            logger.warning("document object upload failed error_type=%s", type(exc).__name__)
+            raise HTTPException(
+                status_code=503,
+                detail="File storage is temporarily unavailable. The document was not created.",
+            ) from exc
+
+    try:
+        db.add(document)
+        db.flush()
+        db.add(
+            KnowledgeDocumentFile(
+                document_id=document.id,
+                workspace_id=workspace_id,
+                original_filename=original_filename,
+                content_type=content_type,
+                file_size=len(file_content),
+                sha256=hashlib.sha256(file_content).hexdigest(),
+                file_content=None if storage_key else file_content,
+                storage_key=storage_key,
+                uploaded_by=user.id,
+            )
         )
-    )
-    _add_version(db, document, user.id)
-    _index_document(db, document)
-    db.add(
-        AuditEvent(
-            workspace_id=workspace_id,
-            project_id=project_id,
-            actor_user_id=user.id,
-            event_type="document.uploaded",
-            object_type="document",
-            object_id=document.id,
-            details_json={
-                "project_id": str(project_id) if project_id else None,
-                "filename": original_filename,
-                "file_size": len(file_content),
-            },
+        _add_version(db, document, user.id)
+        _index_document(db, document)
+        db.add(
+            AuditEvent(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                actor_user_id=user.id,
+                event_type="document.uploaded",
+                object_type="document",
+                object_id=document.id,
+                details_json={
+                    "project_id": str(project_id) if project_id else None,
+                    "filename": original_filename,
+                    "file_size": len(file_content),
+                    "storage": "object_storage" if storage_key else "database_legacy",
+                },
+            )
         )
-    )
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        if storage_key:
+            try:
+                await run_in_threadpool(delete_object, storage_key)
+            except Exception as cleanup_error:
+                logger.warning(
+                    "orphan upload cleanup failed error_type=%s", type(cleanup_error).__name__
+                )
+        raise
     db.refresh(document)
     return _document_view(db, document)
 
@@ -755,7 +795,7 @@ def update_document(
 
 
 @router.get("/{document_id}/file")
-def download_document_file(
+async def download_document_file(
     workspace_id: UUID,
     document_id: UUID,
     user: User = Depends(current_user),
@@ -766,8 +806,19 @@ def download_document_file(
     source = db.get(KnowledgeDocumentFile, document_id)
     if source is None or source.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Original file not found")
+    content = source.file_content
+    if source.storage_key:
+        try:
+            content = await run_in_threadpool(download_object, source.storage_key)
+        except Exception as exc:
+            logger.warning("document object download failed error_type=%s", type(exc).__name__)
+            raise HTTPException(
+                status_code=503, detail="File storage is temporarily unavailable."
+            ) from exc
+    if content is None:
+        raise HTTPException(status_code=404, detail="Original file content is unavailable")
     return Response(
-        content=source.file_content,
+        content=content,
         media_type=source.content_type,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(source.original_filename)}"

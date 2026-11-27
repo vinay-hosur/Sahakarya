@@ -52,3 +52,35 @@ def test_reasoning_providers_require_key_and_model_and_support_xai() -> None:
 
     key_without_model = Settings(xai_api_key=SecretStr("xai-secret"), _env_file=None)
     assert key_without_model.reasoning_configured is False
+
+
+def test_object_storage_requires_complete_https_credentials() -> None:
+    settings = Settings(
+        file_storage_endpoint="https://account.r2.cloudflarestorage.com",
+        file_storage_bucket="sahakarya-files",
+        file_storage_access_key_id="access-id",
+        file_storage_secret_access_key=SecretStr("secret-value"),
+        _env_file=None,
+    )
+    assert settings.object_storage_configured is True
+    assert (
+        Settings(
+            file_storage_endpoint="http://insecure.example.test",
+            file_storage_bucket="sahakarya-files",
+            file_storage_access_key_id="access-id",
+            file_storage_secret_access_key=SecretStr("secret-value"),
+            _env_file=None,
+        ).object_storage_configured
+        is False
+    )
+
+
+def test_invitation_mail_requires_key_and_sender() -> None:
+    settings = Settings(
+        resend_api_key=SecretStr("resend-secret"),
+        invitation_from_email="SAHAKARYA <team@example.test>",
+        public_app_url="https://sahakarya.example.test",
+        _env_file=None,
+    )
+    assert settings.invitation_email_configured is True
+    assert settings.app_public_url == "https://sahakarya.example.test"

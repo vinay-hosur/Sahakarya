@@ -12,9 +12,10 @@ type Member = {
 type Invitation = {
   id: string
   email: string
-  role: 'member' | 'viewer'
+  role: 'admin' | 'member' | 'viewer'
   expires_at: string
   created_at: string
+  status: 'pending' | 'accepted' | 'expired' | 'revoked'
 }
 
 async function request(path: string, init: RequestInit = {}) {
@@ -41,20 +42,26 @@ export default function WorkspaceMembers({
   workspaceId,
   currentUserId,
   role,
+  invitationToken,
+  invitationEmailConfigured,
   onAccepted,
 }: {
   workspaceId: string
   currentUserId: string
   role: string
+  invitationToken: string
+  invitationEmailConfigured: boolean
   onAccepted: (workspaceId: string) => void
 }) {
   const [members, setMembers] = useState<Member[]>([])
   const [invitations, setInvitations] = useState<Invitation[]>([])
   const [inviteToken, setInviteToken] = useState('')
-  const [acceptToken, setAcceptToken] = useState('')
+  const [acceptToken, setAcceptToken] = useState(invitationToken)
+  const [inviteUrl, setInviteUrl] = useState('')
   const [message, setMessage] = useState('')
   const [busyId, setBusyId] = useState('')
   const isOwner = role === 'owner'
+  const isManager = isOwner || role === 'admin'
   const membersEndpoint = `/api/v1/workspaces/${workspaceId}/members`
 
   useEffect(() => {
@@ -64,7 +71,7 @@ export default function WorkspaceMembers({
       const payload = await response.json()
       if (!response.ok) throw new Error(apiMessage(payload, 'Could not load workspace members.'))
       if (current) setMembers(payload as Member[])
-      if (isOwner) {
+      if (isManager) {
         const inviteResponse = await request(`/api/v1/workspaces/${workspaceId}/invitations`)
         const invitePayload = await inviteResponse.json()
         if (!inviteResponse.ok) throw new Error(apiMessage(invitePayload, 'Could not load invitations.'))
@@ -77,7 +84,7 @@ export default function WorkspaceMembers({
       if (current) setMessage(error instanceof Error ? error.message : 'Could not load workspace members.')
     })
     return () => { current = false }
-  }, [membersEndpoint, workspaceId, isOwner])
+  }, [membersEndpoint, workspaceId, isManager])
 
   async function createInvitation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -94,11 +101,38 @@ export default function WorkspaceMembers({
       const payload = await response.json()
       if (!response.ok) throw new Error(apiMessage(payload, 'Could not invite this member.'))
       setInviteToken(String(payload.token))
-      setInvitations((current) => [payload as Invitation, ...current])
-      setMessage(`Invitation created for ${String(payload.email)}. Copy the code below and share it with them.`)
+      setInviteUrl(String(payload.invitation_url || ''))
+      setInvitations((current) => [{ ...payload, status: 'pending' } as Invitation, ...current])
+      setMessage(invitationDeliveryMessage(payload.email_status, String(payload.email)))
       form.reset()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not invite this member.')
+    } finally {
+      setBusyId('')
+    }
+  }
+
+  function invitationDeliveryMessage(emailStatus: string, email: string) {
+    if (emailStatus === 'sent') return `Invitation email was accepted for delivery to ${email}. You can also copy the link below.`
+    if (emailStatus === 'failed') return `Invitation created, but email delivery failed for ${email}. Copy and share the link below.`
+    return `Invitation created for ${email}. Email delivery is not configured; copy and share the secure link below.`
+  }
+
+  async function resendInvitation(invitation: Invitation) {
+    setBusyId(invitation.id)
+    setMessage('Creating a fresh invitation link…')
+    try {
+      const response = await request(`/api/v1/workspaces/${workspaceId}/invitations/${invitation.id}/resend`, { method: 'POST' })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(apiMessage(payload, 'Could not resend invitation.'))
+      setInviteToken(String(payload.token))
+      setInviteUrl(String(payload.invitation_url || ''))
+      setInvitations((current) => current.map((item) => item.id === invitation.id
+        ? { ...item, expires_at: String(payload.expires_at), status: 'pending' }
+        : item))
+      setMessage(invitationDeliveryMessage(String(payload.email_status), String(payload.email)))
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not resend invitation.')
     } finally {
       setBusyId('')
     }
@@ -185,8 +219,8 @@ export default function WorkspaceMembers({
 
   async function copyToken() {
     try {
-      await navigator.clipboard.writeText(inviteToken)
-      setMessage('Invitation code copied. Share it with the invited person.')
+      await navigator.clipboard.writeText(inviteUrl || inviteToken)
+      setMessage(inviteUrl ? 'Secure invitation link copied.' : 'Invitation code copied.')
     } catch {
       setMessage('Copy was unavailable; select and copy the invitation code manually.')
     }
@@ -200,16 +234,16 @@ export default function WorkspaceMembers({
           <h3>Members ({members.length})</h3>
           <ul className="member-list">{members.map((member) => <li className="member-row" key={member.user_id}>
             <div className="member-person"><strong>{member.display_name}{member.user_id === currentUserId ? ' (you)' : ''}</strong><span>{member.email}</span><small>Joined {formatDate(member.joined_at)}</small></div>
-            {isOwner && member.role !== 'owner' ? <div className="member-actions"><select aria-label={`Role for ${member.display_name}`} value={member.role} disabled={busyId === member.user_id} onChange={(event) => void changeRole(member, event.target.value)}><option value="member">Member</option><option value="viewer">Viewer</option></select><button type="button" className="member-remove" disabled={busyId === member.user_id} onClick={() => void removeMember(member)}>Remove</button></div> : <span className="member-role">{member.role}</span>}
+            {isManager && member.role !== 'owner' && (isOwner || member.role !== 'admin') ? <div className="member-actions"><select aria-label={`Role for ${member.display_name}`} value={member.role} disabled={busyId === member.user_id} onChange={(event) => void changeRole(member, event.target.value)}>{isOwner && <option value="admin">Admin</option>}<option value="member">Member</option><option value="viewer">Viewer</option></select><button type="button" className="member-remove" disabled={busyId === member.user_id} onClick={() => void removeMember(member)}>Remove</button></div> : <span className="member-role">{member.role}</span>}
           </li>)}</ul>
         </div>
         <div className="members-panel">
-          {isOwner ? <>
+          {isManager ? <>
             <h3>Invite someone</h3>
-            <form className="member-invite-form" onSubmit={(event) => void createInvitation(event)}><label>Email<input name="email" type="email" required /></label><label>Role<select name="role" defaultValue="member"><option value="member">Member</option><option value="viewer">Viewer</option></select></label><button type="submit" disabled={busyId === 'invite'}>{busyId === 'invite' ? 'Creating…' : 'Create invitation'}</button></form>
-            {inviteToken && <div className="invitation-token"><strong>One-time invitation code</strong><p>Share this with the invited person. They must sign in using the invited email address. The code is shown only now.</p><code>{inviteToken}</code><button type="button" onClick={() => void copyToken()}>Copy code</button></div>}
-            <h4>Pending invitations</h4>
-            {invitations.length === 0 ? <p className="member-empty">No pending invitations.</p> : <ul className="invitation-list">{invitations.map((invitation) => <li key={invitation.id}><div><strong>{invitation.email}</strong><span>{invitation.role} · expires {formatDate(invitation.expires_at)}</span></div><button type="button" className="member-remove" disabled={busyId === invitation.id} onClick={() => void revokeInvitation(invitation)}>Revoke</button></li>)}</ul>}
+            <form className="member-invite-form" onSubmit={(event) => void createInvitation(event)}><label>Email<input name="email" type="email" required /></label><label>Role<select name="role" defaultValue="member">{isOwner && <option value="admin">Admin</option>}<option value="member">Member</option><option value="viewer">Viewer</option></select></label><button type="submit" disabled={busyId === 'invite'}>{busyId === 'invite' ? 'Creating…' : 'Send invitation'}</button></form>
+            {inviteToken && <div className="invitation-token"><strong>Shareable invitation link</strong><p>{invitationEmailConfigured ? 'Email delivery is enabled. The link is shown once so you can share it directly if needed.' : 'Email delivery is not configured yet. Share this secure link with the invited person; they must sign in with the invited email.'}</p><input aria-label="Invitation link" readOnly value={inviteUrl || inviteToken} onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => void copyToken()}>Copy link</button></div>}
+            <h4>Invitations</h4>
+            {invitations.length === 0 ? <p className="member-empty">No invitations yet.</p> : <ul className="invitation-list">{invitations.map((invitation) => <li key={invitation.id}><div><strong>{invitation.email}</strong><span>{invitation.role} · {invitation.status}{invitation.status === 'pending' || invitation.status === 'expired' ? ` · expires ${formatDate(invitation.expires_at)}` : ''}</span></div><div className="invitation-actions">{(invitation.status === 'pending' || invitation.status === 'expired') && <button type="button" className="member-remove" disabled={busyId === invitation.id} onClick={() => void resendInvitation(invitation)}>Resend link</button>}{invitation.status === 'pending' && <button type="button" className="member-remove" disabled={busyId === invitation.id} onClick={() => void revokeInvitation(invitation)}>Revoke</button>}</div></li>)}</ul>}
           </> : <>
             <h3>Accept an invitation</h3>
             <p className="member-empty">Sign in with the email address the workspace owner invited, then enter your one-time invitation code.</p>

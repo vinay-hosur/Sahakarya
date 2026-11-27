@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     CheckConstraint,
     Date,
     DateTime,
@@ -63,6 +64,7 @@ class Workspace(Timestamped, Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     slug: Mapped[str] = mapped_column(String(80), nullable=False)
     owner_user_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
@@ -229,6 +231,56 @@ class IntegrationOAuthState(Timestamped, Base):
     state_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     redirect_uri: Mapped[str] = mapped_column(String(2000), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TelegramChat(Timestamped, Base):
+    __tablename__ = "telegram_chats"
+    __table_args__ = (
+        UniqueConstraint("integration_id", "telegram_chat_id", name="uq_telegram_chat_identity"),
+        Index("ix_telegram_chats_workspace_status", "workspace_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    integration_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("integrations.id", ondelete="CASCADE"), nullable=False
+    )
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    chat_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(255))
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL")
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TelegramMessage(Timestamped, Base):
+    __tablename__ = "telegram_messages"
+    __table_args__ = (
+        UniqueConstraint("chat_id", "telegram_message_id", name="uq_telegram_message_identity"),
+        Index("ix_telegram_messages_workspace_project", "workspace_id", "project_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    chat_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("telegram_chats.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL")
+    )
+    telegram_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sender_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    sender_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    message_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(2000))
 
 
 class Project(Timestamped, Base):
@@ -433,7 +485,8 @@ class KnowledgeDocumentFile(Base):
     content_type: Mapped[str] = mapped_column(String(160), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    file_content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    file_content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    storage_key: Mapped[str | None] = mapped_column(String(512))
     uploaded_by: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

@@ -24,4 +24,8 @@ def meta() -> dict[str, object]:
         "reasoning_configured": settings.reasoning_configured,
         "reasoning_providers": providers,
         "slack_oauth_configured": settings.slack_oauth_configured,
+        "object_storage_configured": settings.object_storage_configured,
+        "max_upload_bytes": 50 * 1024 * 1024,
+        "database_upload_limit_bytes": 5 * 1024 * 1024,
+        "invitation_email_configured": settings.invitation_email_configured,
     }

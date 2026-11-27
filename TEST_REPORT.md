@@ -1,52 +1,37 @@
 # Test report
 
 **Run date:** 2026-11-27  
-**Scope:** Native collaboration, task dependency/history, notifications and mentions, file ingestion/search, workspace AI assistant with provider selection, persistent memory and structured evidence assessments, and free-host deployment preparation.
+**Revision state:** Local working tree; these changes have not yet been deployed.
 
-## Automated checks actually executed
+## Checks run on this working tree
 
 | Command/check | Result |
 | --- | --- |
-| `cd backend; uv run pytest -q` | 59 passed (collection count: 59). |
+| `cd backend; uv run pytest -q` | Passed: 72 tests. |
 | `cd backend; uv run ruff check app tests` | Passed. |
-| `cd backend; uv run ruff format --check app tests` | Passed; 50 files already formatted. |
+| `cd backend; uv run ruff format --check app tests` | Passed: 53 files formatted. |
 | `cd frontend; npm run lint` | Passed (oxlint). |
-| `cd frontend; npm run build` | Passed (TypeScript project build and Vite production bundle). |
-| Cloudflare Pages proxy assertions (Node) | Passed: upstream path/query, session cookie, browser origin, forwarded host/protocol, and rejection of an insecure API origin. |
-| PostgreSQL migration at API startup | Passed against PostgreSQL 17; applied `c4017e36ab92`. |
-| `docker compose exec api uv run alembic current` | `c4017e36ab92` (head). |
-| Docker Compose health checks | PostgreSQL, API, and web containers healthy after final rebuild. |
-| Docker HTTP smoke | Web root, `/health/ready`, and `/api/v1/meta` returned successfully; OpenAPI includes the task-proposal route; Alembic is at migration head. |
+| `cd frontend; npm run build` | Passed (TypeScript and Vite production build). |
+| Alembic PostgreSQL offline SQL generation | Passed for the full chain; one merged head: `d8e37fbc6a21`. No database was contacted or modified by this check. |
+| `git diff --check` | Passed. |
 
-## Coverage added or retained
+## Automated coverage
 
-- Knowledge Hub tests cover create/edit, version snapshots, comments, audit events, workspace/project isolation, document-owner edit rules, and viewer read-only access.
-- File ingestion tests upload Markdown through multipart HTTP, verify extracted content and metadata, search an indexed passage, download the original bytes, call the grounded-answer path with a mocked reasoning provider, and verify upload/search audit events.
-- Search permission coverage confirms a viewer can search and a non-member cannot access another workspace's search endpoint.
-- Chat tests cover channel/message persistence, viewer write restrictions, audit events, and the authenticated WebSocket event flow.
-- GitHub repository count/list tests verify REST pagination handling and bounded, source-attributed results using mocked API responses; they do not use a live GitHub token.
-- Decision tests cover CRUD, evidence references, immutable history, audit events, cross-workspace/member validation, and viewer read-only access.
-- Activity tests cover workspace/project filtering, native event types, viewer read access, and denial for non-members.
-- Member tests cover invitation hashing/acceptance/single use, email match, role changes, removal, owner protection, and non-owner denial.
-- The full backend suite also covers auth, projects, tasks/comments, integrations, retrieval, and reviewed actions.
-- Task tests verify normalized labels, same-project dependencies, cycle rejection, deletion protection while dependencies exist, immutable change history, and viewer-safe reads.
-- Notification tests cover assignment and comment events, chat @email mentions, recipient-only visibility, mark-one/read-all behavior, and unread filtering.
-- Configuration tests verify Render/Postgres URLs select psycopg 3 and the Slack callback can be derived from the public frontend URL.
-- Slack integration tests verify OAuth URL/state creation, hash-only state storage, one-time callback validation, mocked code exchange, encrypted token persistence, MCP discovery, safe API output, token revocation on disconnect, and audit events. They do not contact a live Slack workspace.
-- Assistant tests cover provider selection, grounded response persistence/citations, facts/interpretations/recommendations/unknowns/conflicts, nested evidence citation validation, shared memory lifecycle, viewer restrictions, audit records, and the unconfigured-provider response. Provider adapter contract tests use mocked OpenAI/Anthropic/Gemini responses.
-- Task-proposal tests cover strict provider schema and usage parsing, reject unknown citations, map valid citations to project evidence, and verify drafts do not create tasks until the user submits a task through the native API.
+- Invitations: secure one-time tokens, email matching, acceptance, resend/rotation, status history, and admin role boundaries.
+- Team chat: an owner invites a member; both accounts exchange messages; both see persisted history after switching accounts. Viewer write restrictions remain covered.
+- Uploads: supported PDF/DOCX/Markdown/TXT extraction, metadata, download, lexical indexing, 50 MiB bound, and mocked R2 storage for large files.
+- Telegram: mocked Bot API validation, webhook secret checking, group discovery/association, duplicate delivery, assistant evidence retrieval, and disconnect preservation.
+- GitHub: mocked REST retrieval of repository metadata, README, file tree, and selected source/configuration files; count/list retrieval remains covered.
+- Workspace overview data: workspace descriptions are created, read, and updated through authenticated APIs. The UI uses actual member and audit activity endpoints.
+- Existing project, task, decision, notification, AI provider contract, citation, and reviewed-action tests remain in the suite.
 
-## Live local application and PostgreSQL checks
+## Not verified against live services
 
-- `GET /health/ready` returned `{"status":"ready","dependencies":{"database":"available"}}`.
-- Frontend root at `http://localhost:8080/` returned HTTP 200 from the running Docker stack.
-- The applied PostgreSQL migration head is `c4017e36ab92`; task labels/dependencies/history, recipient-scoped notifications, OAuth state, assistant usage/memory/evidence, and file/chunk tables are present through Alembic.
-- A temporary account used the running API to upload a Markdown file, read its extracted document metadata, retrieve a lexical search hit, and download the original bytes. The temporary workspace and account were removed after the smoke check.
-- A PostgreSQL WebSocket smoke check also verified authenticated chat presence and realtime message delivery alongside stored message history.
-- A separate temporary owner/member pair exercised invitations, task assignment, task comments, chat mentions, notification retrieval, and read-all against the running PostgreSQL-backed API. The temporary workspaces and accounts were removed after verification.
-- The free deployment configuration is prepared for Render API + Neon PostgreSQL + Cloudflare Pages. The Cloudflare proxy route and Pages routing manifest were checked locally. The user has signed in to the free provider accounts; live resource provisioning is underway.
-- A live model smoke request returned a provider usage-limit response. The API now reports that condition without exposing provider response contents or credentials; successful synthesis still depends on restored provider quota. Assistant and grounded-answer contract tests use mocked provider responses.
+- No live Render deployment or production database migration was run for this local change set.
+- No real R2 upload, Resend email, Telegram bot/webhook, GitHub repository token, or Slack OAuth operation was performed. The corresponding automated integration tests use mocks or local test servers.
+- The 50 MiB limit is enforced in the application, but uploads above 5 MiB require the four R2 settings in Render. The 50 MiB path is tested with a mocked object-storage adapter, not a real bucket.
+- Telegram captures new eligible text/caption messages after a group is enabled. It does not import group history; BotFather privacy and group permissions control which updates Telegram sends.
+- Uploads use a single request and are not resumable. OCR and semantic/vector document search are not implemented. Chat real-time fan-out remains single-process; polling is the client fallback.
+- Invitation email requires `RESEND_API_KEY` and `INVITATION_FROM_EMAIL`; otherwise the application provides a secure invitation link for manual sharing.
 
-## Limits of these checks
-
-Automated API tests use in-memory SQLite for most CRUD/permission paths, local MCP test servers for connector/retrieval/action tests, and mocked provider responses. PostgreSQL checks cover migrations, file persistence, chunk search, download, WebSocket delivery, invitations, task notifications, and chat mentions. No live GitHub operation or Slack OAuth account flow was performed; Slack needs a registered app and HTTPS callback. The live model request was blocked by provider quota. File uploads are limited to 5 MiB; extracted text is limited to 100,000 characters; scanned PDFs are rejected because OCR is not implemented. Document retrieval is lexical, not semantic/vector search. Workspace chat fan-out is in-process and requires shared pub/sub before multi-instance deployment. Public deployment still awaits the free hosting accounts and their configuration.
+The earlier deployed baseline was verified separately in the previous report. It must not be taken as evidence that this uncommitted working tree is already live.

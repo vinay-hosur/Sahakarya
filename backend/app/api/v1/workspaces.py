@@ -17,6 +17,7 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=2, max_length=160)
+    description: str = Field(default="", max_length=2000)
 
     @field_validator("name")
     @classmethod
@@ -25,23 +26,37 @@ class WorkspaceCreate(BaseModel):
         if len(value) < 2:
             raise ValueError("Workspace name must contain at least two characters")
         return value
+
+    @field_validator("description")
+    @classmethod
+    def description_is_trimmed(cls, value: str) -> str:
+        return value.strip()
 
 
 class WorkspaceUpdate(BaseModel):
-    name: str = Field(min_length=2, max_length=160)
+    name: str | None = Field(default=None, min_length=2, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
 
     @field_validator("name")
     @classmethod
-    def name_must_not_be_blank(cls, value: str) -> str:
+    def name_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = value.strip()
         if len(value) < 2:
             raise ValueError("Workspace name must contain at least two characters")
         return value
+
+    @field_validator("description")
+    @classmethod
+    def description_is_trimmed(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
 
 
 class WorkspaceOut(BaseModel):
     id: UUID
     name: str
+    description: str
     slug: str
     role: str
 
@@ -53,7 +68,13 @@ def _slug_prefix(name: str) -> str:
 
 
 def _workspace_response(workspace: Workspace, role: str) -> WorkspaceOut:
-    return WorkspaceOut(id=workspace.id, name=workspace.name, slug=workspace.slug, role=role)
+    return WorkspaceOut(
+        id=workspace.id,
+        name=workspace.name,
+        description=workspace.description,
+        slug=workspace.slug,
+        role=role,
+    )
 
 
 @router.get("", response_model=list[WorkspaceOut])
@@ -76,6 +97,7 @@ def create_workspace(
     name = payload.name.strip()
     workspace = Workspace(
         name=name,
+        description=payload.description,
         slug=f"{_slug_prefix(name)}-{secrets.token_hex(3)}",
         owner_user_id=user.id,
     )
@@ -131,18 +153,32 @@ def update_workspace(
     if row is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
     workspace, role = row
-    if role != "owner":
+    if payload.name is None and payload.description is None:
+        raise HTTPException(status_code=422, detail="Provide a name or description to update")
+    if payload.name is not None and payload.name != workspace.name and role != "owner":
         raise HTTPException(status_code=403, detail="Only workspace owners can rename it")
+    if payload.description is not None and role not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=403, detail="Workspace admin access is required to edit its description"
+        )
 
-    workspace.name = payload.name.strip()
+    changed_fields = []
+    if payload.name is not None and payload.name != workspace.name:
+        workspace.name = payload.name
+        changed_fields.append("name")
+    if payload.description is not None and payload.description != workspace.description:
+        workspace.description = payload.description
+        changed_fields.append("description")
+    if not changed_fields:
+        return _workspace_response(workspace, role)
     db.add(
         AuditEvent(
             workspace_id=workspace.id,
             actor_user_id=user.id,
-            event_type="workspace.renamed",
+            event_type="workspace.updated",
             object_type="workspace",
             object_id=workspace.id,
-            details_json={"name": workspace.name},
+            details_json={"changed_fields": changed_fields},
         )
     )
     db.commit()

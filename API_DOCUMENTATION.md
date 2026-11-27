@@ -12,7 +12,7 @@ All `/api/v1` routes except `/meta` require a valid SAHAKARYA session cookie unl
 | --- | --- | --- | --- |
 | GET | `/health/live` | No | Process liveness. |
 | GET | `/health/ready` | No | Readiness; returns 503 if PostgreSQL cannot be reached. |
-| GET | `/api/v1/meta` | No | API version, environment, configured reasoning providers (`id`, `label`, `model`), and the active default. Secrets are not returned. |
+| GET | `/api/v1/meta` | No | API version, environment, configured reasoning providers (`id`, `label`, `model`), active default, and whether optional R2/Resend settings are complete. Secrets are not returned. |
 
 ## Authentication
 
@@ -27,10 +27,10 @@ All `/api/v1` routes except `/meta` require a valid SAHAKARYA session cookie unl
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/v1/workspaces` | List workspaces for the signed-in user. |
-| POST | `/api/v1/workspaces` | Create a workspace. Body: `{ "name": "Product team" }`. |
+| GET | `/api/v1/workspaces` | List workspaces for the signed-in user, including name, description, and role. |
+| POST | `/api/v1/workspaces` | Create a workspace. Body: `{ "name": "Product team", "description": "Optional team purpose" }`. |
 | GET | `/api/v1/workspaces/{workspace_id}` | Read a workspace the user belongs to. |
-| PATCH | `/api/v1/workspaces/{workspace_id}` | Rename a workspace; owner only. Body: `{ "name": "New name" }`. |
+| PATCH | `/api/v1/workspaces/{workspace_id}` | Update its name (owner only) and/or description (owner/admin). Body: `{ "description": "Platform reliability" }` or `{ "name": "New name" }`. |
 
 ### Projects
 
@@ -70,7 +70,7 @@ Owner/member can create and update tasks and add comments; viewer can read tasks
 | --- | --- | --- |
 | GET | /api/v1/workspaces/{workspace_id}/documents?project_id=&category=&tag=&q= | List documents visible in a workspace; filters are optional and q matches title/content text. |
 | POST | /api/v1/workspaces/{workspace_id}/documents | Create a document with title, content, optional category, tags, and project_id. The creator becomes its owner and version 1 is recorded. |
-| POST | /api/v1/workspaces/{workspace_id}/documents/upload | Multipart upload: file (PDF, DOCX, MD, TXT; 5 MiB max), optional title/category/tags/project_id. Text is extracted, stored as a native document, chunk-indexed, and the original file is retained for download. |
+| POST | /api/v1/workspaces/{workspace_id}/documents/upload | Multipart upload: file (PDF, DOCX, MD, TXT; 50 MiB max), optional title/category/tags/project_id. Text is extracted and chunk-indexed. Files above 5 MiB require configured R2; otherwise the API returns 503. When R2 is configured, file bytes go to object storage and PostgreSQL stores metadata/object key. |
 | GET | /api/v1/workspaces/{workspace_id}/documents/search?q=&project_id=&limit= | Search native document passages using workspace-scoped lexical ranking; limit is 1–20. |
 | POST | /api/v1/workspaces/{workspace_id}/documents/search/answer | Body: `{ "query": "...", "project_id": null, "limit": 10 }`. Returns matching passages and, when configured, an optional answer with an evidence assessment (facts, interpretations, recommendations, unknowns, and conflicts). This explicitly sends up to 8 matched passages to the reasoning provider. |
 | GET | /api/v1/workspaces/{workspace_id}/documents/{document_id} | Read a document in its workspace. |
@@ -79,7 +79,7 @@ Owner/member can create and update tasks and add comments; viewer can read tasks
 | GET | /api/v1/workspaces/{workspace_id}/documents/{document_id}/versions | List immutable document snapshots, newest first. |
 | GET / POST | /api/v1/workspaces/{workspace_id}/documents/{document_id}/comments | Read or add a document comment. |
 
-All document routes enforce workspace membership; project associations must point to a project in that workspace. Members can create documents and comment; viewers can read and perform lexical search. Document writes, comments, uploads, and grounded-search requests create audit events; search audit metadata stores query length and result count, not the query. Extracted content is limited to 100,000 characters. Scanned PDFs requiring OCR are rejected. Search uses indexed 300-word chunks with 60-word overlap, term/phrase/title scoring, and document-level deduplication; this is lexical retrieval, not semantic/vector search. Uploading stores the original file in PostgreSQL and extracted text in the document record/chunk table. The original file remains available after editing the document text.
+All document routes enforce workspace membership; project associations must point to a project in that workspace. Members can create documents and comment; viewers can read and perform lexical search. Document writes, comments, uploads, and grounded-search requests create audit events; search audit metadata stores query length and result count, not the query. Extracted content is limited to 100,000 characters. Scanned PDFs requiring OCR are rejected. Search uses indexed 300-word chunks with 60-word overlap, term/phrase/title scoring, and document-level deduplication; this is lexical retrieval, not semantic/vector search. PostgreSQL stores extracted text and file metadata; original bytes are stored in R2 when configured, or in PostgreSQL for legacy uploads up to 5 MiB. Upload uses a single request and is not resumable.
 
 ### Decision intelligence
 
@@ -104,13 +104,14 @@ The response includes actor, timestamp, event type, related object, and a safe s
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | /api/v1/workspaces/{workspace_id}/members | List workspace members; any member can read the roster. |
-| PATCH | /api/v1/workspaces/{workspace_id}/members/{user_id} | Owner changes a member role to member or viewer. |
-| DELETE | /api/v1/workspaces/{workspace_id}/members/{user_id} | Owner removes a member. Workspace owner cannot be removed. |
-| POST / GET | /api/v1/workspaces/{workspace_id}/invitations | Owner creates or lists pending invitations. Create body: { "email": "person@example.com", "role": "viewer" }. The response returns a one-time invitation token. |
-| DELETE | /api/v1/workspaces/{workspace_id}/invitations/{invitation_id} | Owner revokes a pending invitation. |
+| PATCH | /api/v1/workspaces/{workspace_id}/members/{user_id} | Owner/admin changes a member role to admin, member, or viewer; only the owner can grant/change an admin role. |
+| DELETE | /api/v1/workspaces/{workspace_id}/members/{user_id} | Owner/admin removes a member. Only the owner can remove an admin; workspace owner cannot be removed. |
+| POST / GET | /api/v1/workspaces/{workspace_id}/invitations | Owner/admin creates or lists invitations with pending/accepted/expired/revoked status. Create body: { "email": "person@example.com", "role": "viewer" }. The response includes a one-time token/link and email delivery status. |
+| POST | /api/v1/workspaces/{workspace_id}/invitations/{invitation_id}/resend | Rotate the invitation token, extend expiry by seven days, and optionally email the new link. |
+| DELETE | /api/v1/workspaces/{workspace_id}/invitations/{invitation_id} | Owner/admin revokes a pending invitation. Only the owner can manage invitations for the admin role. |
 | POST | /api/v1/workspaces/invitations/accept | Signed-in invited user accepts with { "token": "<one-time invitation token>" }; the account email must match. |
 
-Invitation tokens expire after seven days and only their SHA-256 hashes are stored. No email delivery service is configured, so owners must share the returned token out of band. Only workspace owners can invite, change roles, revoke invitations, or remove members. The owner role cannot be assigned through invitation or changed/removed here.
+Invitation tokens expire after seven days and only their SHA-256 hashes are stored. Email is sent when `RESEND_API_KEY` and `INVITATION_FROM_EMAIL` are configured; otherwise the owner shares the returned secure link. Admins can manage member/viewer access. Only owners can invite, change, revoke, or remove admins. The owner role cannot be assigned through invitation or changed/removed here.
 
 ## Integrations
 
@@ -121,6 +122,14 @@ Invitation tokens expire after seven days and only their SHA-256 hashes are stor
 | POST | `/api/v1/workspaces/{workspace_id}/integrations/slack/oauth/start` | Owner/member only. Creates short-lived single-use state and returns Slack's authorization URL. Requires Slack client settings, an HTTPS callback, and `INTEGRATION_ENCRYPTION_KEY`. |
 | GET | `/api/v1/integrations/slack/oauth/callback` | Slack OAuth callback. Validates/consumes the state, exchanges the code, encrypts the issued token, verifies MCP tool discovery, and redirects to `SLACK_FRONTEND_URL`. |
 | DELETE | `/api/v1/workspaces/{workspace_id}/integrations/{provider}` | Owner/member only. Removes a local integration; Slack is revoked with `auth.revoke` first. A revocation failure leaves the integration configured. GitHub tokens must be revoked in GitHub separately. |
+| GET | `/api/v1/workspaces/{workspace_id}/integrations/telegram/status` | Return Telegram connection status and bot identity without returning the token. |
+| POST | `/api/v1/workspaces/{workspace_id}/integrations/telegram/connect` | Validate a bot token with Telegram `getMe`, encrypt it, and register a secret-verified webhook. Requires `INTEGRATION_ENCRYPTION_KEY` and HTTPS `PUBLIC_API_URL`. |
+| GET | `/api/v1/workspaces/{workspace_id}/integrations/telegram/chats` | List discovered groups, their association, and synchronization time. |
+| PATCH | `/api/v1/workspaces/{workspace_id}/integrations/telegram/chats/{chat_id}` | Enable/pause a discovered group and associate it with a same-workspace project. |
+| DELETE | `/api/v1/workspaces/{workspace_id}/integrations/telegram` | Remove the webhook and credential while retaining previously captured group context. |
+| POST | `/api/v1/integrations/telegram/webhook/{integration_id}` | Public Telegram Bot API endpoint; verifies `X-Telegram-Bot-Api-Secret-Token`, then stores supported new text/caption messages only for enabled groups. |
+
+Telegram bots cannot fetch all historical group messages. Group privacy settings and group membership determine which new messages Telegram delivers. Telegram messages are workspace-scoped and enter assistant retrieval only after a group is enabled. Configure the bot token in the UI; do not place it in Render environment logs or frontend variables.
 
 ## Workspace chat and notifications
 
@@ -143,20 +152,20 @@ Chat and notification routes require workspace membership. Members can post; vie
 | POST | `/api/v1/workspaces/{workspace_id}/requests` | Search connected, eligible MCP read tools. Body: `{ "prompt": "What did we decide about onboarding?" }` (3–2000 characters). Returns request state, bounded evidence, source metadata, and optional validated reasoning. |
 | GET | `/api/v1/workspaces/{workspace_id}/requests/{request_id}` | Read a saved request and its evidence. |
 
-GitHub prompts that explicitly ask to count or list repositories use GitHub's authenticated `GET /user/repos` endpoint directly, with the connected token and REST pagination. Count queries inspect the last page using one item per page; list queries return up to the 20 most recently updated repositories. Other questions continue through the discovered, allowlisted MCP search tools. The fine-grained GitHub token needs repository metadata read access for the repository list endpoint.
+GitHub prompts that explicitly ask to count or list repositories use GitHub's authenticated `GET /user/repos` endpoint directly, with the connected token and REST pagination. Count queries inspect the last page using one item per page; list queries return up to the 20 most recently updated repositories. Questions about a named repository use GitHub's REST API to retrieve repository metadata, README, file tree, and up to three relevant source/configuration files. Issues and pull requests continue through discovered, allowlisted MCP search tools. The fine-grained token needs repository metadata and contents read access, plus the required issue/PR read permissions for those searches. Repository 404 responses are described as not found or inaccessible because GitHub does not distinguish those states for private repositories.
 
 ## Workspace AI assistant
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/v1/workspaces/{workspace_id}/assistant/messages?limit=100` | Read the shared workspace conversation (1–200 most recent messages), including provider/model and available token-usage counts. |
-| POST | `/api/v1/workspaces/{workspace_id}/assistant/chat` | Ask a grounded question. Body: `{ "prompt": "Prepare an onboarding brief", "project_id": null, "provider": "openai" }`. `project_id` and `provider` are optional; provider may be `openai`, `anthropic`, or `gemini`. Returns a persisted assistant reply with citation metadata and an evidence assessment that separates sourced facts, interpretations, recommendations, unknowns, and conflicts. |
+| POST | `/api/v1/workspaces/{workspace_id}/assistant/chat` | Ask a grounded question. Body: `{ "prompt": "Prepare an onboarding brief", "project_id": null, "provider": "openai" }`. `project_id` and `provider` are optional; provider may be `openai`, `anthropic`, `gemini`, `groq`, or `xai` when configured. Returns a persisted assistant reply with citation metadata and an evidence assessment that separates sourced facts, interpretations, recommendations, unknowns, and conflicts. |
 | POST | `/api/v1/workspaces/{workspace_id}/assistant/projects/{project_id}/task-proposals` | Draft up to five evidence-cited project tasks. Body: `{ "prompt": "Turn the migration plan into tasks", "provider": "gemini" }`; provider is optional. Suggestions are not persisted as tasks; users edit and explicitly create selected tasks through the native task endpoint. Returns 503 when no configured provider is available and 502 for invalid provider output. |
 | GET | `/api/v1/workspaces/{workspace_id}/assistant/memories?project_id=` | List shared workspace memories, optionally including workspace-wide memories and those for one project. |
 | POST | `/api/v1/workspaces/{workspace_id}/assistant/memories` | Save shared memory. Body: `{ "content": "Deployments require a review", "project_id": null }`. Content is 3–1,000 characters; each workspace supports up to 100 entries. |
 | DELETE | `/api/v1/workspaces/{workspace_id}/assistant/memories/{memory_id}` | Remove a saved memory. |
 
-All routes require workspace membership. Viewers may read messages/memories and ask questions; only owners/members can add or remove memories or create the suggested tasks. Assistant turns and memory changes are persisted and audited; task-proposal audit records contain aggregate counts/provider/usage, not prompt text. The persisted evidence assessment is optional for messages created before migration `c4017e36ab92`. When providers return usage data, input/output/total token counts are stored with the assistant message and audit event. Chat and task proposals send bounded matching native/external records to the selected server-configured provider; connect/read timeouts are configurable with `REASONING_CONNECT_TIMEOUT_SECONDS` and `REASONING_READ_TIMEOUT_SECONDS`. They return 503 if that provider is not configured and 502 if the provider request fails. The assistant does not write to an integration.
+All routes require workspace membership. Viewers may read messages/memories and ask questions; only owners/members can add or remove memories or create the suggested tasks. Assistant turns and memory changes are persisted and audited; task-proposal audit records contain aggregate counts/provider/usage, not prompt text. When providers return usage data, input/output/total token counts are stored with the assistant message and audit event. Chat and task proposals send bounded matching native/external records to the selected server-configured provider; connect/read timeouts are configurable with `REASONING_CONNECT_TIMEOUT_SECONDS` and `REASONING_READ_TIMEOUT_SECONDS`. They return 503 if that provider is not configured and 502 if the provider request fails. The assistant does not write to an integration.
 
 ## GitHub issue proposals
 

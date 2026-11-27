@@ -210,3 +210,87 @@ def test_invitation_requires_matching_email_and_owner_role_is_not_invitable() ->
         ).status_code == 403
 
     asyncio.run(_exercise_api(scenario))
+
+
+def test_resend_rotates_secure_link_and_invitation_status_is_retained() -> None:
+    async def scenario(client: httpx.AsyncClient, _: sessionmaker) -> None:
+        owner = await _register(client, "invite-resend-owner@example.com")
+        workspace_id = owner["workspaces"][0]["id"]
+        base = f"/api/v1/workspaces/{workspace_id}/invitations"
+        created = await client.post(base, json={"email": "resend-target@example.com"})
+        assert created.status_code == 201, created.text
+        first = created.json()
+        assert first["email_status"] == "not_configured"
+        assert "#team?invite=" in first["invitation_url"]
+        listed = await client.get(base)
+        assert listed.json()[0]["status"] == "pending"
+
+        resent = await client.post(f"{base}/{first['id']}/resend")
+        assert resent.status_code == 200, resent.text
+        second = resent.json()
+        assert second["token"] != first["token"]
+        assert second["invitation_url"].endswith(second["token"])
+
+        await client.post("/api/v1/auth/logout")
+        await _register(client, "resend-target@example.com", "Invitation Target")
+        assert (
+            await client.post(
+                "/api/v1/workspaces/invitations/accept", json={"token": first["token"]}
+            )
+        ).status_code == 404
+        accepted = await client.post(
+            "/api/v1/workspaces/invitations/accept", json={"token": second["token"]}
+        )
+        assert accepted.status_code == 200, accepted.text
+        await client.post("/api/v1/auth/logout")
+        await client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": "invite-resend-owner@example.com",
+                "password": "correct-horse-battery-staple",
+            },
+        )
+        final_list = await client.get(base)
+        assert final_list.json()[0]["status"] == "accepted"
+
+    asyncio.run(_exercise_api(scenario))
+
+
+def test_workspace_admin_can_manage_members_but_cannot_escalate_admin_role() -> None:
+    async def scenario(client: httpx.AsyncClient, _: sessionmaker) -> None:
+        owner = await _register(client, "admin-role-owner@example.com")
+        workspace_id = owner["workspaces"][0]["id"]
+        invitation = await client.post(
+            f"/api/v1/workspaces/{workspace_id}/invitations",
+            json={"email": "workspace-admin@example.com", "role": "admin"},
+        )
+        assert invitation.status_code == 201, invitation.text
+        await client.post("/api/v1/auth/logout")
+        admin = await _register(client, "workspace-admin@example.com", "Workspace Admin")
+        admin_id = admin["user"]["id"]
+        assert (
+            await client.post(
+                "/api/v1/workspaces/invitations/accept",
+                json={"token": invitation.json()["token"]},
+            )
+        ).status_code == 200
+
+        regular_invite = await client.post(
+            f"/api/v1/workspaces/{workspace_id}/invitations",
+            json={"email": "admin-invites-member@example.com", "role": "member"},
+        )
+        assert regular_invite.status_code == 201
+        assert (
+            await client.post(
+                f"/api/v1/workspaces/{workspace_id}/invitations",
+                json={"email": "admin-invites-admin@example.com", "role": "admin"},
+            )
+        ).status_code == 403
+        assert (
+            await client.patch(
+                f"/api/v1/workspaces/{workspace_id}/members/{admin_id}",
+                json={"role": "member"},
+            )
+        ).status_code == 403
+
+    asyncio.run(_exercise_api(scenario))

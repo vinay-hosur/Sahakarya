@@ -61,21 +61,34 @@ def test_register_workspace_session_and_logout() -> None:
         whoami = await client.get("/api/v1/auth/me")
         assert whoami.status_code == 200
         assert whoami.json()["user"]["id"] == user["id"]
+        assert whoami.json()["workspaces"][0]["description"] == ""
 
-        created = await client.post("/api/v1/workspaces", json={"name": "Product Team"})
+        created = await client.post(
+            "/api/v1/workspaces",
+            json={"name": "Product Team", "description": "  Product operations  "},
+        )
         assert created.status_code == 201
         workspace = created.json()
         assert workspace["role"] == "owner"
+        assert workspace["description"] == "Product operations"
 
         read = await client.get(f"/api/v1/workspaces/{workspace['id']}")
         assert read.status_code == 200
         assert read.json()["name"] == "Product Team"
+        assert read.json()["description"] == "Product operations"
 
         renamed = await client.patch(
             f"/api/v1/workspaces/{workspace['id']}", json={"name": "Platform Team"}
         )
         assert renamed.status_code == 200
         assert renamed.json()["name"] == "Platform Team"
+
+        described = await client.patch(
+            f"/api/v1/workspaces/{workspace['id']}",
+            json={"description": "Platform reliability and delivery"},
+        )
+        assert described.status_code == 200
+        assert described.json()["description"] == "Platform reliability and delivery"
 
         logged_out = await client.post("/api/v1/auth/logout")
         assert logged_out.status_code == 204

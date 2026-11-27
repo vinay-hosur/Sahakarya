@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     session_ttl_days: int = 14
     session_cookie_secure: bool | None = None
     integration_encryption_key: str | None = None
+    file_storage_endpoint: str | None = None
+    file_storage_bucket: str | None = None
+    file_storage_access_key_id: str | None = None
+    file_storage_secret_access_key: SecretStr | None = None
+    resend_api_key: SecretStr | None = None
+    invitation_from_email: str | None = None
+    public_app_url: str | None = None
+    public_api_url: str | None = None
     openai_api_key: SecretStr | None = None
     openai_model: str | None = None
     anthropic_api_key: SecretStr | None = None
@@ -79,6 +87,32 @@ class Settings(BaseSettings):
         if configured:
             return configured
         return f"{self.slack_frontend_url.rstrip('/')}/api/v1/integrations/slack/oauth/callback"
+
+    @property
+    def object_storage_configured(self) -> bool:
+        return bool(
+            self.file_storage_endpoint
+            and self.file_storage_endpoint.startswith("https://")
+            and self.file_storage_bucket
+            and self.file_storage_bucket.strip()
+            and self.file_storage_access_key_id
+            and self.file_storage_access_key_id.strip()
+            and self.file_storage_secret_access_key
+            and self.file_storage_secret_access_key.get_secret_value().strip()
+        )
+
+    @property
+    def invitation_email_configured(self) -> bool:
+        return bool(
+            self.resend_api_key
+            and self.resend_api_key.get_secret_value().strip()
+            and self.invitation_from_email
+            and self.invitation_from_email.strip()
+        )
+
+    @property
+    def app_public_url(self) -> str:
+        return (self.public_app_url or self.slack_frontend_url).rstrip("/")
 
     @property
     def reasoning_providers(self) -> list[dict[str, str]]:

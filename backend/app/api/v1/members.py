@@ -1,15 +1,19 @@
 import hashlib
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Literal
+from urllib.parse import quote
 from uuid import UUID
 
+import httpx2
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.auth import current_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.entities import (
     AuditEvent,
@@ -20,7 +24,8 @@ from app.models.entities import (
 )
 
 router = APIRouter(prefix="/workspaces", tags=["workspace members and invitations"])
-MemberRole = Literal["member", "viewer"]
+MemberRole = Literal["admin", "member", "viewer"]
+logger = logging.getLogger("sahakarya.invitations")
 
 
 class MemberView(BaseModel):
@@ -49,6 +54,8 @@ class InviteCreated(BaseModel):
     role: MemberRole
     expires_at: datetime
     token: str
+    invitation_url: str
+    email_status: Literal["sent", "not_configured", "failed"]
 
 
 class InviteView(BaseModel):
@@ -58,6 +65,7 @@ class InviteView(BaseModel):
     role: MemberRole
     expires_at: datetime
     created_at: datetime
+    status: Literal["pending", "accepted", "expired", "revoked"]
 
 
 class InviteAccept(BaseModel):
@@ -77,19 +85,19 @@ def _workspace_role(db: Session, workspace_id: UUID, user_id: UUID) -> str:
     )
     if role is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if role not in {"owner", "member", "viewer"}:
+    if role not in {"owner", "admin", "member", "viewer"}:
         raise HTTPException(status_code=403, detail="Workspace role is invalid")
     return role
 
 
-def _require_owner(db: Session, workspace_id: UUID, user_id: UUID) -> Workspace:
+def _require_manager(db: Session, workspace_id: UUID, user_id: UUID) -> tuple[Workspace, str]:
     role = _workspace_role(db, workspace_id, user_id)
-    if role != "owner":
-        raise HTTPException(status_code=403, detail="Only workspace owners can manage members")
+    if role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Workspace admin access is required")
     workspace = db.get(Workspace, workspace_id)
     if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    return workspace
+    return workspace, role
 
 
 def _member_query(workspace_id: UUID):
@@ -116,16 +124,61 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _invitation_url(token: str) -> str:
+    return f"{settings.app_public_url}/#team?invite={quote(token, safe='')}"
+
+
+async def _send_invitation_email(email: str, workspace_name: str, role: str, url: str) -> str:
+    if not settings.invitation_email_configured:
+        return "not_configured"
+    assert settings.resend_api_key is not None
+    try:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(10.0, read=20.0)) as client:
+            response = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key.get_secret_value()}"},
+                json={
+                    "from": settings.invitation_from_email,
+                    "to": [email],
+                    "subject": f"Join {workspace_name} on SAHAKARYA",
+                    "text": (
+                        f"You have been invited to join {workspace_name} as a {role}.\n\n"
+                        f"Accept the invitation: {url}\n\n"
+                        "This link expires in seven days and can only be used by the invited "
+                        "email address."
+                    ),
+                },
+            )
+            response.raise_for_status()
+        return "sent"
+    except Exception as exc:
+        logger.warning("invitation email delivery failed error_type=%s", type(exc).__name__)
+        return "failed"
+
+
+def _invite_status(invitation: WorkspaceInvitation, now: datetime) -> str:
+    if invitation.accepted_at:
+        return "accepted"
+    if invitation.revoked_at:
+        return "revoked"
+    expires_at = invitation.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return "expired" if expires_at <= now else "pending"
+
+
 @router.post(
     "/{workspace_id}/invitations", response_model=InviteCreated, status_code=status.HTTP_201_CREATED
 )
-def create_invitation(
+async def create_invitation(
     workspace_id: UUID,
     payload: InviteCreate,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> InviteCreated:
-    _require_owner(db, workspace_id, user.id)
+    workspace, actor_role = _require_manager(db, workspace_id, user.id)
+    if actor_role == "admin" and payload.role == "admin":
+        raise HTTPException(status_code=403, detail="Only the workspace owner can invite admins")
     email = str(payload.email).casefold()
     email_member = db.scalar(
         select(User.id)
@@ -174,6 +227,10 @@ def create_invitation(
         )
     )
     db.commit()
+    invitation_link = _invitation_url(token)
+    email_status = await _send_invitation_email(
+        email, workspace.name, payload.role, invitation_link
+    )
     return InviteCreated(
         id=invitation.id,
         workspace_id=workspace_id,
@@ -181,6 +238,8 @@ def create_invitation(
         role=payload.role,
         expires_at=expires_at,
         token=token,
+        invitation_url=invitation_link,
+        email_status=email_status,
     )
 
 
@@ -190,15 +249,12 @@ def list_invitations(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[InviteView]:
-    _require_owner(db, workspace_id, user.id)
+    _require_manager(db, workspace_id, user.id)
     now = datetime.now(UTC)
     rows = db.scalars(
         select(WorkspaceInvitation)
         .where(
             WorkspaceInvitation.workspace_id == workspace_id,
-            WorkspaceInvitation.accepted_at.is_(None),
-            WorkspaceInvitation.revoked_at.is_(None),
-            WorkspaceInvitation.expires_at > now,
         )
         .order_by(WorkspaceInvitation.created_at.desc())
     ).all()
@@ -210,6 +266,7 @@ def list_invitations(
             role=row.role,
             expires_at=row.expires_at,
             created_at=row.created_at,
+            status=_invite_status(row, now),
         )
         for row in rows
     ]
@@ -224,7 +281,7 @@ def revoke_invitation(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> None:
-    _require_owner(db, workspace_id, user.id)
+    _, actor_role = _require_manager(db, workspace_id, user.id)
     invitation = db.scalar(
         select(WorkspaceInvitation)
         .where(
@@ -237,6 +294,10 @@ def revoke_invitation(
     )
     if invitation is None:
         raise HTTPException(status_code=404, detail="Pending invitation not found")
+    if actor_role == "admin" and invitation.role == "admin":
+        raise HTTPException(
+            status_code=403, detail="Only the workspace owner can revoke admin invites"
+        )
     invitation.revoked_at = datetime.now(UTC)
     db.add(
         AuditEvent(
@@ -249,6 +310,50 @@ def revoke_invitation(
         )
     )
     db.commit()
+
+
+@router.post("/{workspace_id}/invitations/{invitation_id}/resend", response_model=InviteCreated)
+async def resend_invitation(
+    workspace_id: UUID,
+    invitation_id: UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> InviteCreated:
+    workspace, actor_role = _require_manager(db, workspace_id, user.id)
+    invitation = db.scalar(
+        select(WorkspaceInvitation)
+        .where(
+            WorkspaceInvitation.workspace_id == workspace_id,
+            WorkspaceInvitation.id == invitation_id,
+        )
+        .with_for_update()
+    )
+    if invitation is None or invitation.accepted_at or invitation.revoked_at:
+        raise HTTPException(status_code=404, detail="Invitation is no longer resendable")
+    if actor_role == "admin" and invitation.role == "admin":
+        raise HTTPException(
+            status_code=403, detail="Only the workspace owner can resend admin invites"
+        )
+    token = secrets.token_urlsafe(36)
+    now = datetime.now(UTC)
+    invitation.token_hash = _token_hash(token)
+    invitation.expires_at = now + timedelta(days=7)
+    invitation.invited_by = user.id
+    db.commit()
+    invitation_link = _invitation_url(token)
+    email_status = await _send_invitation_email(
+        invitation.invited_email, workspace.name, invitation.role, invitation_link
+    )
+    return InviteCreated(
+        id=invitation.id,
+        workspace_id=workspace_id,
+        email=invitation.invited_email,
+        role=invitation.role,
+        expires_at=invitation.expires_at,
+        token=token,
+        invitation_url=invitation_link,
+        email_status=email_status,
+    )
 
 
 @router.post("/invitations/accept", response_model=MemberView)
@@ -308,7 +413,7 @@ def update_member_role(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> MemberView:
-    workspace = _require_owner(db, workspace_id, user.id)
+    workspace, actor_role = _require_manager(db, workspace_id, user.id)
     member = db.scalar(
         select(WorkspaceMember)
         .where(
@@ -323,6 +428,8 @@ def update_member_role(
         raise HTTPException(
             status_code=409, detail="The workspace owner role cannot be changed here"
         )
+    if actor_role == "admin" and (member.role == "admin" or payload.role == "admin"):
+        raise HTTPException(status_code=403, detail="Only the workspace owner can manage admins")
     if member.role == payload.role:
         raise HTTPException(status_code=422, detail="Member already has that role")
     previous_role = member.role
@@ -349,7 +456,7 @@ def remove_member(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> None:
-    workspace = _require_owner(db, workspace_id, user.id)
+    workspace, actor_role = _require_manager(db, workspace_id, user.id)
     member = db.scalar(
         select(WorkspaceMember)
         .where(
@@ -366,6 +473,8 @@ def remove_member(
         or member.role == "owner"
     ):
         raise HTTPException(status_code=409, detail="The workspace owner cannot be removed")
+    if actor_role == "admin" and member.role == "admin":
+        raise HTTPException(status_code=403, detail="Only the workspace owner can remove admins")
     removed_role = member.role
     db.delete(member)
     db.add(

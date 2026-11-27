@@ -186,7 +186,7 @@ def _workspace_role(db: Session, workspace_id: UUID, user_id: UUID, *, write: bo
     )
     if role is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if role not in {"owner", "member", "viewer"}:
+    if role not in {"owner", "admin", "member", "viewer"}:
         raise HTTPException(status_code=403, detail="Workspace role is invalid")
     if write and role == "viewer":
         raise HTTPException(status_code=403, detail="Viewer access is read-only")

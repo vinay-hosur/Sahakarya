@@ -8,6 +8,8 @@ import ProjectOverview from './ProjectOverview'
 import WorkspaceMembers from './WorkspaceMembers'
 import ChatPanel from './ChatPanel'
 import AssistantPanel from './AssistantPanel'
+import TelegramIntegrationPanel from './TelegramIntegration'
+import WorkspaceOverview from './WorkspaceOverview'
 import { apiBaseUrl } from './api'
 import './App.css'
 
@@ -16,8 +18,13 @@ type AppView = 'overview' | 'workspace' | 'projects' | 'knowledge' | 'decisions'
 const appViews: AppView[] = ['overview', 'workspace', 'projects', 'knowledge', 'decisions', 'activity', 'team', 'messages', 'assistant', 'integrations', 'workflow']
 
 function readAppView(): AppView {
-  const requested = window.location.hash.slice(1) as AppView
+  const requested = window.location.hash.slice(1).split('?')[0] as AppView
   return appViews.includes(requested) ? requested : 'overview'
+}
+
+function readInvitationToken(): string {
+  const hashQuery = window.location.hash.split('?')[1]
+  return new URLSearchParams(hashQuery || window.location.search).get('invite') || ''
 }
 
 const slackOAuthMessages: Record<string, string> = {
@@ -51,7 +58,7 @@ type HealthResponse = {
 }
 
 type UserProfile = { id: string; email: string; display_name: string }
-type Workspace = { id: string; name: string; slug: string; role: string }
+type Workspace = { id: string; name: string; description: string; slug: string; role: string }
 type Project = {
   id: string
   workspace_id: string
@@ -129,6 +136,10 @@ type InstanceMeta = {
   reasoning_provider: string | null
   reasoning_providers: ReasoningProvider[]
   slack_oauth_configured: boolean
+  object_storage_configured: boolean
+  max_upload_bytes: number
+  database_upload_limit_bytes: number
+  invitation_email_configured: boolean
 }
 type WorkspaceNotification = {
   id: string
@@ -230,8 +241,10 @@ function App() {
   const [user, setUser] = useState<UserProfile | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('')
-  const selectedWorkspaceRole = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.role
+  const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)
+  const selectedWorkspaceRole = selectedWorkspace?.role
   const canManageWorkspace = selectedWorkspaceRole !== 'viewer'
+  const canEditWorkspace = selectedWorkspaceRole === 'owner' || selectedWorkspaceRole === 'admin'
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [authMessage, setAuthMessage] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
@@ -260,6 +273,8 @@ function App() {
   const [reasoningConfigured, setReasoningConfigured] = useState(false)
   const [reasoningModel, setReasoningModel] = useState('')
   const [reasoningProviders, setReasoningProviders] = useState<ReasoningProvider[]>([])
+  const [objectStorageConfigured, setObjectStorageConfigured] = useState(false)
+  const [invitationEmailConfigured, setInvitationEmailConfigured] = useState(false)
   const [selectedReasoningProvider, setSelectedReasoningProvider] = useState('')
   const [issueTitle, setIssueTitle] = useState('')
   const [issueDescription, setIssueDescription] = useState('')
@@ -322,6 +337,8 @@ function App() {
         setReasoningProviders(meta.reasoning_providers || [])
         setSelectedReasoningProvider(meta.reasoning_provider || meta.reasoning_providers?.[0]?.id || '')
         setSlackOAuthConfigured(meta.slack_oauth_configured)
+        setObjectStorageConfigured(meta.object_storage_configured)
+        setInvitationEmailConfigured(meta.invitation_email_configured)
       }
     }).catch(() => undefined)
     return () => { isCurrent = false }
@@ -504,19 +521,29 @@ function App() {
     setWorkspaces(result.workspaces)
     setSessionState('signed-in')
     switchWorkspace(workspaceId)
+    const params = new URLSearchParams(window.location.search)
+    params.delete('invite')
+    const query = params.toString()
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${query ? `?${query}` : ''}#team`,
+    )
+    setActiveView('team')
   }
 
   async function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setWorkspaceMessage('')
     const form = event.currentTarget
-    const name = String(new FormData(form).get('workspace_name') || '').trim()
+    const values = new FormData(form)
+    const name = String(values.get('workspace_name') || '').trim()
     if (!name) return
     try {
       const response = await apiRequest('/api/v1/workspaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, description: String(values.get('workspace_description') || '').trim() }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not create workspace.')
@@ -923,6 +950,7 @@ function App() {
           <div className="card-kicker">YOUR TEAM'S CONTEXT LAYER</div>
           <h1>{authMode === 'login' ? 'Welcome back.' : 'Start your workspace.'}</h1>
           <p className="auth-intro">Connect the conversations, code, tasks, and decisions your team already has.</p>
+          {readInvitationToken() && <p className="auth-invitation" role="status">Invitation link detected. Sign in or create an account with the invited email, then accept it in Team.</p>}
           {authMode === 'register' && <label>Display name<input name="display_name" type="text" autoComplete="name" minLength={2} maxLength={160} required /></label>}
           <label>Email<input name="email" type="email" autoComplete="email" required /></label>
           <label>Password<input name="password" type="password" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={authMode === 'register' ? 12 : 1} required /></label>
@@ -949,18 +977,37 @@ function App() {
           <span className="brand-name">SAHAKARYA</span>
         </a>
 
+        <details className="topnav-workspace" open={['workspace', 'projects', 'team', 'activity'].includes(activeView) || undefined}>
+          <summary className={['workspace', 'projects', 'team', 'activity'].includes(activeView) ? 'active' : ''}>Workspace</summary>
+          <nav className="topnav-workspace-menu" aria-label="Workspace navigation">
+            {([
+              ['workspace', 'Overview'], ['projects', 'Projects'], ['team', 'Team members'], ['activity', 'Activity'],
+            ] as const).map(([view, label]) => (
+              <button key={view} type="button" className={activeView === view ? 'active' : ''}
+                aria-current={activeView === view ? 'page' : undefined}
+                onClick={() => { window.history.pushState(null, '', `#${view}`); setActiveView(view) }}>{label}</button>
+            ))}
+          </nav>
+        </details>
+
         <nav className="topnav" aria-label="Primary navigation">
           {([
-            ['overview', 'Overview'], ['workspace', 'Workspace'], ['projects', 'Projects'],
-            ['knowledge', 'Knowledge'], ['decisions', 'Decisions'], ['activity', 'Activity'],
-            ['team', 'Team'], ['messages', 'Messages'], ['assistant', 'AI Assistant'],
-            ['integrations', 'Integrations'], ['workflow', 'Workflow'],
+            ['overview', 'Overview'], ['knowledge', 'Knowledge'], ['decisions', 'Decisions'],
+            ['messages', 'Messages'], ['assistant', 'AI Assistant'], ['integrations', 'Integrations'],
+            ['workflow', 'Workflow'],
           ] as const).map(([view, label]) => (
             <button key={view} type="button" className={activeView === view ? 'active' : ''}
               aria-current={activeView === view ? 'page' : undefined}
               onClick={() => { window.history.pushState(null, '', `#${view}`); setActiveView(view) }}>{label}</button>
           ))}
         </nav>
+
+        <label className="global-workspace-select" htmlFor="global-workspace-select">
+          <span>Active workspace</span>
+          <select id="global-workspace-select" value={selectedWorkspaceId} onChange={(event) => switchWorkspace(event.target.value)}>
+            {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+          </select>
+        </label>
 
         <div className="user-menu">
           <span className="user-greeting">{user?.display_name}</span>
@@ -1042,17 +1089,21 @@ function App() {
           <div className="workspace-heading">
             <div>
               <div className="card-kicker">YOUR TEAM SPACE</div>
-              <h2 id="workspace-title">Workspace</h2>
+              <h2 id="workspace-title">Workspace overview</h2>
             </div>
-            <label className="workspace-select-label" htmlFor="workspace-select">Active workspace</label>
-            <select id="workspace-select" value={selectedWorkspaceId} onChange={(event) => switchWorkspace(event.target.value)}>
-              {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
-            </select>
           </div>
+          {selectedWorkspace && <WorkspaceOverview
+            key={selectedWorkspaceId}
+            workspace={selectedWorkspace}
+            projects={projects}
+            canEdit={canEditWorkspace}
+            onWorkspaceUpdated={(updated) => setWorkspaces((current) => current.map((workspace) => workspace.id === updated.id ? updated : workspace))}
+          />}
           <div className="workspace-create-row">
             <form className="workspace-create-form" onSubmit={(event) => void createWorkspace(event)}>
               <label htmlFor="workspace-name">Create another workspace</label>
               <div><input id="workspace-name" name="workspace_name" placeholder="e.g. Product team" minLength={2} maxLength={160} required /><button type="submit">Create workspace</button></div>
+              <label htmlFor="workspace-description-new">Description (optional)<textarea id="workspace-description-new" name="workspace_description" maxLength={2000} rows={2} placeholder="What will this workspace focus on?" /></label>
             </form>
             <p className="workspace-note">Signed in as <strong>{user?.email}</strong>. Each space is isolated by membership.</p>
           </div>
@@ -1112,8 +1163,9 @@ function App() {
           workspaceId={selectedWorkspaceId}
           projects={projects}
           userId={user?.id || ''}
-          isWorkspaceOwner={selectedWorkspaceRole === 'owner'}
+          isWorkspaceOwner={selectedWorkspaceRole === 'owner' || selectedWorkspaceRole === 'admin'}
           canWrite={canManageWorkspace}
+          objectStorageConfigured={objectStorageConfigured}
         />
 
         <DecisionBoard
@@ -1129,6 +1181,8 @@ function App() {
           workspaceId={selectedWorkspaceId}
           currentUserId={user?.id || ''}
           role={selectedWorkspaceRole || 'viewer'}
+          invitationToken={readInvitationToken()}
+          invitationEmailConfigured={invitationEmailConfigured}
           onAccepted={(joinedWorkspaceId) => void syncAfterInvitation(joinedWorkspaceId)}
         />
 
@@ -1137,10 +1191,10 @@ function App() {
         <section className="integrations-section" id="integrations" aria-labelledby="integrations-title">
           <div className="section-heading integrations-heading">
             <div>
-              <div className="card-kicker">VERIFIED CONTEXT SOURCES</div>
+              <div className="card-kicker">CONNECTED CONTEXT SOURCES</div>
               <h2 id="integrations-title">Connect your team’s tools</h2>
             </div>
-            <p>Connection is confirmed only after SAHAKARYA reaches the official MCP endpoint and discovers its capabilities.</p>
+            <p>GitHub and Slack use MCP capability discovery. Telegram uses the official Bot API and a verified webhook.</p>
           </div>
           <div className="integration-grid">
             {(['github', 'slack'] as const).map((provider) => {
@@ -1200,6 +1254,9 @@ function App() {
                 </article>
               )
             })}
+          </div>
+          <div className="integration-grid telegram-integration-grid">
+            <TelegramIntegrationPanel workspaceId={selectedWorkspaceId} projects={projects} canWrite={canManageWorkspace} />
           </div>
           {integrationMessage && <p className="integration-message" role="status">{integrationMessage}</p>}
         </section>

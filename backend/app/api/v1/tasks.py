@@ -154,7 +154,7 @@ def _workspace_access(db: Session, workspace_id: UUID, user_id: UUID, *, write: 
     )
     if role is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
-    if role not in {"owner", "member", "viewer"}:
+    if role not in {"owner", "admin", "member", "viewer"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Workspace role is invalid"
         )

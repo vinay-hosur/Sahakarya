@@ -48,6 +48,7 @@ class UserResponse(BaseModel):
 class WorkspaceResponse(BaseModel):
     id: UUID
     name: str
+    description: str
     slug: str
     role: str
 
@@ -86,7 +87,13 @@ def _user_workspaces(db: Session, user_id: UUID) -> list[WorkspaceResponse]:
         .order_by(Workspace.created_at)
     ).all()
     return [
-        WorkspaceResponse(id=workspace.id, name=workspace.name, slug=workspace.slug, role=role)
+        WorkspaceResponse(
+            id=workspace.id,
+            name=workspace.name,
+            description=workspace.description,
+            slug=workspace.slug,
+            role=role,
+        )
         for workspace, role in rows
     ]
 
