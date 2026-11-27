@@ -34,6 +34,12 @@ services:
         sync: false
       - key: INVITATION_FROM_EMAIL
         sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: CLOUDFLARE_MODEL
+        value: "@cf/google/gemma-4-26b-a4b-it"
       - key: PUBLIC_APP_URL
         value: https://sahakarya.pages.dev
       - key: PUBLIC_API_URL

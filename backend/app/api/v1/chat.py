@@ -1,11 +1,11 @@
 import asyncio
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.auth import current_user
@@ -118,13 +118,16 @@ def _role(db: Session, workspace_id: UUID, user_id: UUID, *, write: bool = False
     return role
 
 
-def _channel(db: Session, workspace_id: UUID, channel_id: UUID) -> ChatChannel:
-    channel = db.scalar(
-        select(ChatChannel).where(
-            ChatChannel.workspace_id == workspace_id,
-            ChatChannel.id == channel_id,
-        )
+def _channel(
+    db: Session, workspace_id: UUID, channel_id: UUID, *, lock: bool = False
+) -> ChatChannel:
+    query = select(ChatChannel).where(
+        ChatChannel.workspace_id == workspace_id,
+        ChatChannel.id == channel_id,
     )
+    if lock:
+        query = query.with_for_update()
+    channel = db.scalar(query)
     if channel is None:
         raise HTTPException(status_code=404, detail="Chat channel not found")
     return channel
@@ -221,15 +224,24 @@ async def create_message(
     db: Session = Depends(get_db),
 ) -> MessageView:
     _role(db, workspace_id, user.id, write=True)
-    channel = _channel(db, workspace_id, channel_id)
+    channel = _channel(db, workspace_id, channel_id, lock=True)
+    created_at = datetime.now(UTC)
+    latest_message_at = db.scalar(
+        select(func.max(ChatMessage.created_at)).where(ChatMessage.channel_id == channel_id)
+    )
+    if latest_message_at is not None:
+        if latest_message_at.tzinfo is None:
+            latest_message_at = latest_message_at.replace(tzinfo=UTC)
+        created_at = max(created_at, latest_message_at + timedelta(microseconds=1))
     message = ChatMessage(
         workspace_id=workspace_id,
         channel_id=channel_id,
         sender_user_id=user.id,
         body=payload.body,
+        created_at=created_at,
     )
     db.add(message)
-    channel.last_activity_at = datetime.now(UTC)
+    channel.last_activity_at = created_at
     db.flush()
     notify_mentions(
         db,

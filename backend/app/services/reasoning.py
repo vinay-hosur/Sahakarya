@@ -574,7 +574,14 @@ async def propose_native_tasks(
 
 def _provider_usage(provider: str, payload: dict) -> dict[str, int] | None:
     total = None
-    if provider in {"openai", "groq", "xai"}:
+    if provider == "cloudflare":
+        raw = payload.get("usage", {})
+        fields = {
+            "input_tokens": raw.get("prompt_tokens"),
+            "output_tokens": raw.get("completion_tokens"),
+        }
+        total = raw.get("total_tokens")
+    elif provider in {"openai", "groq", "xai"}:
         raw = payload.get("usage", {})
         fields = {
             "input_tokens": raw.get("input_tokens"),
@@ -618,6 +625,30 @@ def _provider_body(
     schema_name: str = "sahakarya_grounded_context",
     max_output_tokens: int = 1200,
 ) -> dict:
+    if provider == "cloudflare":
+        return {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        instructions
+                        + " Return only a JSON object matching this schema: "
+                        + json.dumps(schema)
+                    ),
+                },
+                {"role": "user", "content": input_value},
+            ],
+            "max_completion_tokens": max_output_tokens,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+        }
     if provider in {"openai", "groq", "xai"}:
         body = {
             "model": model,
@@ -659,6 +690,14 @@ def _provider_body(
 
 
 def _provider_request(provider: str, api_key: str, model: str) -> tuple[str, dict[str, str]]:
+    if provider == "cloudflare":
+        account_id = (settings.cloudflare_account_id or "").strip()
+        if not account_id:
+            raise ReasoningUnavailable("Cloudflare Workers AI is missing its account ID")
+        return (
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions",
+            {"Authorization": f"Bearer {api_key}"},
+        )
     if provider == "openai":
         return OPENAI_RESPONSES_URL, {"Authorization": f"Bearer {api_key}"}
     if provider == "anthropic":
@@ -679,6 +718,14 @@ def _provider_request(provider: str, api_key: str, model: str) -> tuple[str, dic
 
 
 def _provider_response_text(provider: str, payload: dict) -> str:
+    if provider == "cloudflare":
+        choices = payload.get("choices", [])
+        for choice in choices:
+            message = choice.get("message", {}) if isinstance(choice, dict) else {}
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, str) and content.strip():
+                return content
+        raise ReasoningUnavailable("Reasoning provider returned no structured output")
     if provider in {"openai", "groq", "xai"}:
         return _response_text(payload)
     if provider == "anthropic":

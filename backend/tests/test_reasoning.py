@@ -207,6 +207,12 @@ def test_structured_reasoning_rejects_unknown_citation(monkeypatch) -> None:
             "xai_model",
             "https://api.x.ai/v1/responses",
         ),
+        (
+            "cloudflare",
+            "cloudflare_api_token",
+            "cloudflare_model",
+            "https://api.cloudflare.com/client/v4/accounts/account-id/ai/v1/chat/completions",
+        ),
     ],
 )
 def test_reasoning_adapters_send_provider_specific_requests(
@@ -240,6 +246,11 @@ def test_reasoning_adapters_send_provider_specific_requests(
 
         def json(self):
             text = json.dumps(output)
+            if provider == "cloudflare":
+                return {
+                    "choices": [{"message": {"content": text}}],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
+                }
             if provider in {"groq", "xai"}:
                 return {
                     "status": "completed",
@@ -277,6 +288,8 @@ def test_reasoning_adapters_send_provider_specific_requests(
     monkeypatch.setattr(reasoning.httpx2, "AsyncClient", FakeClient)
     monkeypatch.setattr(settings, key_field, SecretStr("provider-secret"))
     monkeypatch.setattr(settings, model_field, "test-model")
+    if provider == "cloudflare":
+        monkeypatch.setattr(settings, "cloudflare_account_id", "account-id")
     source = SimpleNamespace(
         id=source_id,
         provider="native_document",
@@ -296,7 +309,11 @@ def test_reasoning_adapters_send_provider_specific_requests(
     assert result["citation_ids"] == [str(source_id)]
     assert result["usage"]["total_tokens"] == 28
     assert captured["url"] == url
-    if provider in {"groq", "xai"}:
+    if provider == "cloudflare":
+        assert captured["headers"]["Authorization"] == "Bearer provider-secret"
+        assert captured["body"]["model"] == "test-model"
+        assert captured["body"]["response_format"]["json_schema"]["strict"] is True
+    elif provider in {"groq", "xai"}:
         assert captured["headers"]["Authorization"] == "Bearer provider-secret"
         assert "store" not in captured["body"]
         assert captured["body"]["text"]["format"]["strict"] is True

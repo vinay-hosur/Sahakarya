@@ -39,7 +39,9 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/assistant", tags=["workspa
 class AssistantChatCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=3000)
     project_id: UUID | None = None
-    provider: str | None = Field(default=None, pattern="^(openai|anthropic|gemini|groq|xai)$")
+    provider: str | None = Field(
+        default=None, pattern="^(openai|anthropic|gemini|groq|xai|cloudflare)$"
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -94,7 +96,9 @@ class AssistantMemoryView(BaseModel):
 
 class TaskProposalCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=2000)
-    provider: str | None = Field(default=None, pattern="^(openai|anthropic|gemini|groq|xai)$")
+    provider: str | None = Field(
+        default=None, pattern="^(openai|anthropic|gemini|groq|xai|cloudflare)$"
+    )
 
     @field_validator("prompt")
     @classmethod

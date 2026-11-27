@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     groq_model: str | None = None
     xai_api_key: SecretStr | None = None
     xai_model: str | None = None
+    cloudflare_account_id: str | None = None
+    cloudflare_api_token: SecretStr | None = None
+    cloudflare_model: str | None = "@cf/google/gemma-4-26b-a4b-it"
     default_reasoning_provider: str | None = None
     reasoning_connect_timeout_seconds: int = 10
     reasoning_read_timeout_seconds: int = 60
@@ -122,11 +125,18 @@ class Settings(BaseSettings):
             ("gemini", "Google Gemini", self.gemini_api_key, self.gemini_model),
             ("groq", "Groq", self.groq_api_key, self.groq_model),
             ("xai", "xAI Grok", self.xai_api_key, self.xai_model),
+            (
+                "cloudflare",
+                "Cloudflare Workers AI",
+                self.cloudflare_api_token,
+                self.cloudflare_model,
+            ),
         )
         return [
             {"id": provider_id, "label": label, "model": model.strip()}
             for provider_id, label, api_key, model in configured
             if api_key and api_key.get_secret_value().strip() and model and model.strip()
+            and (provider_id != "cloudflare" or (self.cloudflare_account_id or "").strip())
         ]
 
     @property
@@ -145,12 +155,15 @@ class Settings(BaseSettings):
             "gemini": (self.gemini_api_key, self.gemini_model),
             "groq": (self.groq_api_key, self.groq_model),
             "xai": (self.xai_api_key, self.xai_model),
+            "cloudflare": (self.cloudflare_api_token, self.cloudflare_model),
         }
         values = fields.get(provider_id or "")
         if not values:
             return None
         api_key, model = values
         if not api_key or not api_key.get_secret_value().strip() or not model or not model.strip():
+            return None
+        if provider_id == "cloudflare" and not (self.cloudflare_account_id or "").strip():
             return None
         return api_key.get_secret_value().strip(), model.strip()
 

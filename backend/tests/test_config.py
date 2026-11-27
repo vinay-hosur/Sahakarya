@@ -33,12 +33,14 @@ def test_slack_callback_defaults_to_frontend_proxy_path() -> None:
     assert settings.slack_oauth_configured is True
 
 
-def test_reasoning_providers_require_key_and_model_and_support_xai() -> None:
+def test_reasoning_providers_require_credentials_and_support_xai_and_cloudflare() -> None:
     settings = Settings(
         gemini_api_key=SecretStr("gemini-secret"),
         gemini_model="gemini-3.1-flash-lite",
         xai_api_key=SecretStr("xai-secret"),
         xai_model="grok-4.3",
+        cloudflare_account_id="account-id",
+        cloudflare_api_token=SecretStr("cloudflare-token"),
         default_reasoning_provider="gemini",
         _env_file=None,
     )
@@ -46,12 +48,25 @@ def test_reasoning_providers_require_key_and_model_and_support_xai() -> None:
     assert settings.reasoning_providers == [
         {"id": "gemini", "label": "Google Gemini", "model": "gemini-3.1-flash-lite"},
         {"id": "xai", "label": "xAI Grok", "model": "grok-4.3"},
+        {
+            "id": "cloudflare",
+            "label": "Cloudflare Workers AI",
+            "model": "@cf/google/gemma-4-26b-a4b-it",
+        },
     ]
     assert settings.active_reasoning_provider == "gemini"
     assert settings.reasoning_credentials("xai") == ("xai-secret", "grok-4.3")
+    assert settings.reasoning_credentials("cloudflare") == (
+        "cloudflare-token",
+        "@cf/google/gemma-4-26b-a4b-it",
+    )
 
     key_without_model = Settings(xai_api_key=SecretStr("xai-secret"), _env_file=None)
     assert key_without_model.reasoning_configured is False
+    cloudflare_without_account = Settings(
+        cloudflare_api_token=SecretStr("cloudflare-token"), _env_file=None
+    )
+    assert cloudflare_without_account.reasoning_credentials("cloudflare") is None
 
 
 def test_object_storage_requires_complete_https_credentials() -> None:

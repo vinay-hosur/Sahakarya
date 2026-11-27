@@ -3,10 +3,13 @@ from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 import httpx
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.v1 import chat as chat_api
+from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -134,12 +137,93 @@ def test_invited_workspace_members_exchange_persistent_chat_messages() -> None:
             "Welcome to the project.",
             "Thanks, I can see it.",
         ]
+        assert refreshed_history.json()[1]["created_at"] > refreshed_history.json()[0]["created_at"]
         assert refreshed_history.json()[1]["sender_user_id"] == member["user"]["id"]
         with sessions() as db:
             saved = db.scalars(select(ChatMessage)).all()
             assert len(saved) == 2
 
     asyncio.run(_exercise_api(scenario))
+
+
+def test_workspace_chat_websocket_delivers_teammate_messages(monkeypatch) -> None:
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    test_sessions = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    def override_get_db():
+        with test_sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(chat_api, "SessionLocal", test_sessions)
+    try:
+        with TestClient(app) as client:
+            owner_response = client.post(
+                "/api/v1/auth/register",
+                json={
+                    "email": "chat-websocket-owner@example.com",
+                    "display_name": "Chat Owner",
+                    "password": "correct-horse-battery-staple",
+                },
+            )
+            assert owner_response.status_code == 201, owner_response.text
+            owner_session = client.cookies.get(settings.session_cookie_name)
+            workspace_id = owner_response.json()["workspaces"][0]["id"]
+            invite_response = client.post(
+                f"/api/v1/workspaces/{workspace_id}/invitations",
+                json={"email": "chat-websocket-member@example.com", "role": "member"},
+            )
+            assert invite_response.status_code == 201, invite_response.text
+            channel_response = client.post(
+                f"/api/v1/workspaces/{workspace_id}/chat/channels", json={"name": "general"}
+            )
+            assert channel_response.status_code == 201, channel_response.text
+            channel_id = channel_response.json()["id"]
+
+            client.post("/api/v1/auth/logout")
+            member_response = client.post(
+                "/api/v1/auth/register",
+                json={
+                    "email": "chat-websocket-member@example.com",
+                    "display_name": "Chat Member",
+                    "password": "correct-horse-battery-staple",
+                },
+            )
+            assert member_response.status_code == 201, member_response.text
+            member_session = client.cookies.get(settings.session_cookie_name)
+            accepted = client.post(
+                "/api/v1/workspaces/invitations/accept",
+                json={"token": invite_response.json()["token"]},
+            )
+            assert accepted.status_code == 200, accepted.text
+
+            client.cookies.set(settings.session_cookie_name, owner_session, domain="testserver")
+            websocket_url = (
+                f"/api/v1/workspaces/{workspace_id}/chat/ws?channel_id={channel_id}"
+            )
+            with client.websocket_connect(
+                websocket_url, headers={"origin": settings.allowed_origins[0]}
+            ) as websocket:
+                assert websocket.receive_json()["type"] == "presence"
+                client.cookies.set(
+                    settings.session_cookie_name, member_session, domain="testserver"
+                )
+                sent = client.post(
+                    f"/api/v1/workspaces/{workspace_id}/chat/channels/{channel_id}/messages",
+                    json={"body": "Teammate message reached the live channel."},
+                )
+                assert sent.status_code == 201, sent.text
+                event = websocket.receive_json()
+                assert event["type"] == "message"
+                assert event["message"]["body"] == "Teammate message reached the live channel."
+                assert event["message"]["sender_display_name"] == "Chat Member"
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
 
 def test_workspace_chat_mentions_notify_only_the_named_member() -> None:

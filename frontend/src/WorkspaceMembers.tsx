@@ -34,6 +34,18 @@ function apiMessage(payload: unknown, fallback: string) {
   return fallback
 }
 
+function invitationTokenValue(value: string) {
+  const input = value.trim()
+  if (!input.includes('://')) return input
+  try {
+    const inviteUrl = new URL(input)
+    const hashQuery = inviteUrl.hash.split('?')[1]
+    return new URLSearchParams(hashQuery || inviteUrl.search).get('invite') || input
+  } catch {
+    return input
+  }
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value))
 }
@@ -80,10 +92,17 @@ export default function WorkspaceMembers({
         setInvitations([])
       }
     }
-    void load().catch((error) => {
-      if (current) setMessage(error instanceof Error ? error.message : 'Could not load workspace members.')
-    })
-    return () => { current = false }
+    const refresh = () => {
+      void load().catch((error) => {
+        if (current) setMessage(error instanceof Error ? error.message : 'Could not load workspace members.')
+      })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => {
+      current = false
+      window.removeEventListener('focus', refresh)
+    }
   }, [membersEndpoint, workspaceId, isManager])
 
   async function createInvitation(event: FormEvent<HTMLFormElement>) {
@@ -146,7 +165,7 @@ export default function WorkspaceMembers({
       const response = await request('/api/v1/workspaces/invitations/accept', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: acceptToken.trim() }),
+        body: JSON.stringify({ token: invitationTokenValue(acceptToken) }),
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(apiMessage(payload, 'Could not accept invitation.'))
@@ -240,14 +259,19 @@ export default function WorkspaceMembers({
         <div className="members-panel">
           {isManager ? <>
             <h3>Invite someone</h3>
-            <form className="member-invite-form" onSubmit={(event) => void createInvitation(event)}><label>Email<input name="email" type="email" required /></label><label>Role<select name="role" defaultValue="member">{isOwner && <option value="admin">Admin</option>}<option value="member">Member</option><option value="viewer">Viewer</option></select></label><button type="submit" disabled={busyId === 'invite'}>{busyId === 'invite' ? 'Creating…' : 'Send invitation'}</button></form>
+            <p className="member-empty">{invitationEmailConfigured
+              ? 'We will email a one-time invitation. Your teammate must sign in with this email address to join.'
+              : 'Email delivery is off. Create a one-time link, then share it with your teammate. They must sign in with this email address to join.'}</p>
+            <form className="member-invite-form" onSubmit={(event) => void createInvitation(event)}><label>Email<input name="email" type="email" required /></label><label>Role<select name="role" defaultValue="member">{isOwner && <option value="admin">Admin</option>}<option value="member">Member</option><option value="viewer">Viewer</option></select></label><button type="submit" disabled={busyId === 'invite'}>{busyId === 'invite' ? (invitationEmailConfigured ? 'Sending…' : 'Creating…') : invitationEmailConfigured ? 'Send invitation' : 'Create invite link'}</button></form>
             {inviteToken && <div className="invitation-token"><strong>Shareable invitation link</strong><p>{invitationEmailConfigured ? 'Email delivery is enabled. The link is shown once so you can share it directly if needed.' : 'Email delivery is not configured yet. Share this secure link with the invited person; they must sign in with the invited email.'}</p><input aria-label="Invitation link" readOnly value={inviteUrl || inviteToken} onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => void copyToken()}>Copy link</button></div>}
             <h4>Invitations</h4>
             {invitations.length === 0 ? <p className="member-empty">No invitations yet.</p> : <ul className="invitation-list">{invitations.map((invitation) => <li key={invitation.id}><div><strong>{invitation.email}</strong><span>{invitation.role} · {invitation.status}{invitation.status === 'pending' || invitation.status === 'expired' ? ` · expires ${formatDate(invitation.expires_at)}` : ''}</span></div><div className="invitation-actions">{(invitation.status === 'pending' || invitation.status === 'expired') && <button type="button" className="member-remove" disabled={busyId === invitation.id} onClick={() => void resendInvitation(invitation)}>Resend link</button>}{invitation.status === 'pending' && <button type="button" className="member-remove" disabled={busyId === invitation.id} onClick={() => void revokeInvitation(invitation)}>Revoke</button>}</div></li>)}</ul>}
           </> : <>
             <h3>Accept an invitation</h3>
-            <p className="member-empty">Sign in with the email address the workspace owner invited, then enter your one-time invitation code.</p>
-            <form className="member-accept-form" onSubmit={(event) => void acceptInvitation(event)}><label>Invitation code<textarea value={acceptToken} onChange={(event) => setAcceptToken(event.target.value)} minLength={32} maxLength={200} rows={3} required /></label><button type="submit" disabled={busyId === 'accept'}>{busyId === 'accept' ? 'Checking…' : 'Accept invitation'}</button></form>
+            <p className="member-empty">{acceptToken
+              ? 'Invitation link detected. Make sure you are signed in with the invited email, then accept below.'
+              : 'Sign in with the invited email, then paste the one-time invitation code or link below.'}</p>
+            <form className="member-accept-form" onSubmit={(event) => void acceptInvitation(event)}><label>Invitation code or link<textarea value={acceptToken} onChange={(event) => setAcceptToken(event.target.value)} minLength={32} maxLength={500} rows={3} required /></label><button type="submit" disabled={busyId === 'accept'}>{busyId === 'accept' ? 'Checking…' : 'Accept invitation'}</button></form>
           </>}
         </div>
       </div>

@@ -38,7 +38,9 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/requests", tags=["context 
 
 class RequestCreate(BaseModel):
     prompt: str = Field(min_length=3, max_length=2000)
-    provider: str | None = Field(default=None, pattern="^(openai|anthropic|gemini|groq|xai)$")
+    provider: str | None = Field(
+        default=None, pattern="^(openai|anthropic|gemini|groq|xai|cloudflare)$"
+    )
 
     @field_validator("prompt")
     @classmethod

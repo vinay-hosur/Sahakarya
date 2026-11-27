@@ -4,6 +4,15 @@ import { apiBaseUrl } from './api'
 type Channel = { id: string; workspace_id: string; name: string; created_at: string; last_activity_at: string }
 type Message = { id: string; channel_id: string; sender_user_id: string; sender_display_name: string; body: string; created_at: string }
 type WorkspaceMember = { user_id: string; email: string; display_name: string }
+
+function mergeMessages(...groups: Message[][]) {
+  const byId = new Map<string, Message>()
+  groups.flat().forEach((item) => byId.set(item.id, item))
+  return [...byId.values()].sort((left, right) =>
+    left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
+  )
+}
+
 async function chatRequest(path: string, init: RequestInit = {}) {
   return fetch(`${apiBaseUrl}${path}`, {
     ...init,
@@ -43,11 +52,21 @@ export default function ChatPanel({ workspaceId, userId, canWrite }: { workspace
     setActiveChannelId((current) => rows.some((row) => row.id === current) ? current : rows[0]?.id || '')
   }, [workspaceId])
 
+  const loadMembers = useCallback(async () => {
+    const response = await chatRequest(`/api/v1/workspaces/${workspaceId}/members`)
+    if (!response.ok) throw new Error('Could not load workspace members.')
+    setMembers(await response.json() as WorkspaceMember[])
+  }, [workspaceId])
+
   const loadMessages = useCallback(async (channelId: string) => {
     if (!channelId) return
     const response = await chatRequest(`/api/v1/workspaces/${workspaceId}/chat/channels/${channelId}/messages`)
     if (!response.ok) throw new Error('Could not load channel messages.')
-    setMessageState({ channelId, rows: await response.json() as Message[] })
+    const rows = await response.json() as Message[]
+    setMessageState((current) => ({
+      channelId,
+      rows: mergeMessages(current.channelId === channelId ? current.rows : [], rows),
+    }))
   }, [workspaceId])
 
   useEffect(() => {
@@ -58,14 +77,13 @@ export default function ChatPanel({ workspaceId, userId, canWrite }: { workspace
   }, [loadChannels])
 
   useEffect(() => {
-    let current = true
-    void chatRequest(`/api/v1/workspaces/${workspaceId}/members`).then(async (response) => {
-      if (!response.ok) return
-      const rows = await response.json() as WorkspaceMember[]
-      if (current) setMembers(rows)
-    }).catch(() => undefined)
-    return () => { current = false }
-  }, [workspaceId])
+    const refreshMembers = () => {
+      void loadMembers().catch(() => undefined)
+    }
+    refreshMembers()
+    window.addEventListener('focus', refreshMembers)
+    return () => window.removeEventListener('focus', refreshMembers)
+  }, [loadMembers])
 
   useEffect(() => {
     if (!activeChannelId) return
@@ -87,10 +105,25 @@ export default function ChatPanel({ workspaceId, userId, canWrite }: { workspace
       socket = new WebSocket(socketUrl)
       socket.onopen = () => { if (!stopped) setSocketState({ channelId: activeChannelId, status: 'live' }) }
       socket.onmessage = (event) => {
+        if (stopped) return
         try {
-          const payload = JSON.parse(String(event.data)) as { type?: string; message?: Message }
+          const payload = JSON.parse(String(event.data)) as {
+            type?: string
+            message?: Message
+            user_id?: string
+            online?: boolean
+          }
+          if (payload.type === 'presence' && payload.online && payload.user_id !== userId) {
+            void loadMembers().catch(() => undefined)
+          }
           if (payload.type === 'message' && payload.message) {
-            setMessageState((current) => current.channelId !== activeChannelId || current.rows.some((item) => item.id === payload.message?.id) ? current : { ...current, rows: [...current.rows, payload.message as Message] })
+            setMessageState((current) => ({
+              channelId: activeChannelId,
+              rows: mergeMessages(
+                current.channelId === activeChannelId ? current.rows : [],
+                [payload.message as Message],
+              ),
+            }))
           }
         } catch { /* Ignore malformed events and keep the conversation open. */ }
       }
@@ -105,7 +138,7 @@ export default function ChatPanel({ workspaceId, userId, canWrite }: { workspace
       window.setTimeout(() => setSocketState({ channelId: activeChannelId, status: 'polling' }), 0)
     }
     return () => { stopped = true; window.clearTimeout(reconnectTimer); socket?.close() }
-  }, [activeChannelId, reconnectTick, workspaceId])
+  }, [activeChannelId, loadMembers, reconnectTick, userId, workspaceId])
 
   useEffect(() => {
     if (!activeChannelId || connection === 'live') return
@@ -146,7 +179,10 @@ export default function ChatPanel({ workspaceId, userId, canWrite }: { workspace
       const payload = await response.json()
       if (!response.ok) throw new Error(typeof payload.detail === 'string' ? payload.detail : 'Message could not be sent.')
       const sent = payload as Message
-      setMessageState((current) => current.channelId === activeChannelId && current.rows.some((item) => item.id === sent.id) ? current : { channelId: activeChannelId, rows: current.channelId === activeChannelId ? [...current.rows, sent] : [sent] })
+      setMessageState((current) => ({
+        channelId: activeChannelId,
+        rows: mergeMessages(current.channelId === activeChannelId ? current.rows : [], [sent]),
+      }))
       setChannels((current) => current.map((item) => item.id === activeChannelId ? { ...item, last_activity_at: sent.created_at } : item))
       setDraft('')
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Message could not be sent.') }
