@@ -734,6 +734,24 @@ function App() {
         body: JSON.stringify({ prompt, provider: selectedReasoningProvider || undefined }),
       })
       const result = (await response.json()) as ContextRequest & { detail?: string }
+      if (!response.ok && response.status === 404 && result.detail === 'Workspace not found') {
+        const authResponse = await apiRequest('/api/v1/auth/me')
+        if (authResponse.ok) {
+          const refreshedAuth = (await authResponse.json()) as AuthResult
+          const stillHasAccess = refreshedAuth.workspaces.some((workspace) => workspace.id === selectedWorkspaceId)
+          applyAuth(refreshedAuth)
+          if (!stillHasAccess) {
+            const fallbackWorkspace = refreshedAuth.workspaces[0]
+            if (fallbackWorkspace) switchWorkspace(fallbackWorkspace.id)
+            setContextMessage(fallbackWorkspace
+              ? `Your previous workspace access was stale. Switched to ${fallbackWorkspace.name}; select the workspace with GitHub connected before trying again.`
+              : 'This account has no workspace membership. Accept a workspace invitation or ask its owner to invite this account.')
+          } else {
+            setContextMessage('SAHAKARYA rejected this workspace even though your account lists it. Refresh the page and sign in again. GitHub permissions have not been checked yet.')
+          }
+          return
+        }
+      }
       if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not search context.')
       setActiveContextRequest(result)
       setSelectedSourceIds(result.sources.slice(0, 10).map((source) => source.id))
