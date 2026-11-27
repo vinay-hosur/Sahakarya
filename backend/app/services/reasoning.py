@@ -372,9 +372,32 @@ async def reason_over_context(
             "credit_balance_exhausted",
         }:
             raise ReasoningProviderLimit(
-                "The selected AI provider has reached its rate or usage limit."
+                f"{provider_id} has reached its rate or usage limit. Check the provider's "
+                "usage dashboard or retry after its quota resets."
             ) from exc
-        raise ReasoningUnavailable("Grounded reasoning provider returned an error") from exc
+        if exc.response.status_code == 401:
+            message = (
+                f"{provider_id} rejected the API key. "
+                "Check its key in Render's environment settings."
+            )
+        elif exc.response.status_code == 403:
+            message = (
+                f"{provider_id} denied the request. Check API access, billing, "
+                "free-tier eligibility, and model availability for this key."
+            )
+        elif exc.response.status_code == 404:
+            message = (
+                f"{provider_id} did not recognize the configured model or endpoint. "
+                "Check its model ID."
+            )
+        elif exc.response.status_code == 400:
+            message = (
+                f"{provider_id} rejected the request format for this model (HTTP 400). "
+                "Check the configured model ID and its structured JSON output support."
+            )
+        else:
+            message = f"{provider_id} returned HTTP {exc.response.status_code}. Try again shortly."
+        raise ReasoningUnavailable(message) from exc
     except httpx2.TimeoutException as exc:
         logger.warning("reasoning provider timed out provider=%s", provider_id)
         raise ReasoningUnavailable("Grounded reasoning provider timed out") from exc

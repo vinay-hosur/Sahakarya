@@ -14,7 +14,7 @@ Restart the API after changing the key. Existing credentials encrypted with a pr
 
 ## GitHub
 
-The current adapter connects to `https://api.githubcopilot.com/mcp/` with a GitHub bearer token. Create a fine-grained personal access token limited to the demo repository. Grant **Issues: Read and write** for approved issue creation and **Metadata: Read-only**. Add **Contents: Read-only** only if code search is needed. Organization-owned repositories may require organization approval.
+The current adapter connects to `https://api.githubcopilot.com/mcp/` with a GitHub bearer token. Create a fine-grained personal access token limited to the demo repository. Grant **Issues: Read and write** for approved issue creation. SAHAKARYA can read README and file-tree context from public repositories without repository contents permissions. For private repository metadata and files, grant **Metadata: Read-only** and **Contents: Read-only**. Organization-owned repositories may require organization approval.
 
 In SAHAKARYA, sign in, choose the target workspace, open **Connect your team’s tools**, paste the GitHub token, and submit. Confirm the UI reports **Verified** and displays discovered tools. If it reports an error, the saved token is encrypted but the connection is not live; recheck repository selection, expiration, organization approval, and permissions.
 

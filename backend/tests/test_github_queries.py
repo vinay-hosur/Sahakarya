@@ -203,3 +203,89 @@ def test_github_repository_question_retrieves_readme_tree_and_source(monkeypatch
         item.source_url and item.source_url.startswith("https://github.com/") for item in results
     )
     assert "https://api.github.com/repos/limitless/sahakarya/readme" in calls
+
+
+def test_public_github_repository_uses_anonymous_reads_when_saved_token_is_restricted(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, str | None]] = []
+    readme = "SAHAKARYA is a collaboration workspace for teams."
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload=None) -> None:
+            self.status_code = status_code
+            self.payload = payload
+            self.headers = {}
+            self.text = ""
+
+        @property
+        def is_success(self) -> bool:
+            return 200 <= self.status_code < 300
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise AssertionError(f"Unexpected HTTP {self.status_code}")
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, *, headers: dict, **_kwargs) -> None:
+            self.headers = headers
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def get(self, url: str, *, params=None, headers=None) -> FakeResponse:
+            request_headers = {**self.headers, **(headers or {})}
+            authorization = request_headers.get("Authorization")
+            calls.append((url, authorization))
+            if url == "https://api.github.com/repos/vinay-hosur/Sahakarya":
+                if authorization:
+                    return FakeResponse(404)
+                return FakeResponse(
+                    200,
+                    {
+                        "full_name": "vinay-hosur/Sahakarya",
+                        "html_url": "https://github.com/vinay-hosur/Sahakarya",
+                        "description": "Team collaboration workspace",
+                        "default_branch": "main",
+                        "language": "Python",
+                        "private": False,
+                    },
+                )
+            if url.endswith("/readme"):
+                return FakeResponse(
+                    200,
+                    {
+                        "encoding": "base64",
+                        "content": base64.b64encode(readme.encode()).decode(),
+                        "html_url": "https://github.com/vinay-hosur/Sahakarya/blob/main/README.md",
+                    },
+                )
+            if "/git/trees/main" in url:
+                return FakeResponse(200, {"truncated": False, "tree": []})
+            raise AssertionError(f"Unexpected GitHub API request: {url} {params}")
+
+    monkeypatch.setattr(context_retrieval.httpx2, "AsyncClient", FakeClient)
+    results = asyncio.run(
+        context_retrieval.retrieve_github_repository_context(
+            "restricted-token",
+            "Read the README for vinay-hosur/Sahakarya and summarize its purpose.",
+        )
+    )
+
+    assert any(item.metadata.get("content_type") == "readme" for item in results)
+    assert (
+        next(item for item in results if item.metadata.get("content_type") == "readme").content_text
+        == readme
+    )
+    assert calls[0] == (
+        "https://api.github.com/repos/vinay-hosur/Sahakarya",
+        "Bearer restricted-token",
+    )
+    assert calls[1] == ("https://api.github.com/repos/vinay-hosur/Sahakarya", None)
+    assert all(authorization is None for _, authorization in calls[2:])

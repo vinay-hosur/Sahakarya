@@ -496,6 +496,13 @@ def _github_headers(
     }
 
 
+def _github_public_headers(accept: str = "application/vnd.github+json") -> dict[str, str]:
+    return {
+        "Accept": accept,
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    }
+
+
 def _github_repository_terms(value: str) -> set[str]:
     return {
         token.casefold()
@@ -642,12 +649,29 @@ async def retrieve_github_repository_context(
     requested_name = _repository_name_from_prompt(prompt)
     repository = None
     if requested_name:
+        repository_url = f"{GITHUB_API_ROOT}/repos/{requested_name}"
         async with httpx2.AsyncClient(
             headers=headers,
             timeout=httpx2.Timeout(20.0, read=45.0),
             follow_redirects=False,
         ) as client:
-            response = await client.get(f"{GITHUB_API_ROOT}/repos/{requested_name}")
+            response = await client.get(repository_url)
+            # Public repositories are readable without a token. Fine-grained tokens
+            # can be restricted to selected repositories, and expired or narrow tokens
+            # must not prevent a public README lookup from working.
+            if response.status_code in {401, 403, 404}:
+                async with httpx2.AsyncClient(
+                    headers=_github_public_headers(),
+                    timeout=httpx2.Timeout(20.0, read=45.0),
+                    follow_redirects=False,
+                ) as public_client:
+                    public_response = await public_client.get(repository_url)
+                if public_response.is_success:
+                    response = public_response
+                elif public_response.status_code == 404:
+                    response = public_response
+                else:
+                    public_response.raise_for_status()
         if response.status_code == 404:
             return [
                 RetrievedContext(
@@ -700,6 +724,7 @@ async def retrieve_github_repository_context(
     repo_url = repository.get("html_url") or f"https://github.com/{full_name}"
     description = str(repository.get("description") or "No repository description is set.")
     default_branch = repository.get("default_branch")
+    content_headers = headers if repository.get("private") else _github_public_headers()
     language = repository.get("language")
     topics = repository.get("topics") if isinstance(repository.get("topics"), list) else []
     contexts = [
@@ -723,7 +748,7 @@ async def retrieve_github_repository_context(
     ]
     encoded_name = quote(full_name, safe="/")
     async with httpx2.AsyncClient(
-        headers=headers,
+        headers=content_headers,
         timeout=httpx2.Timeout(20.0, read=45.0),
         follow_redirects=False,
     ) as client:
@@ -840,7 +865,11 @@ async def retrieve_github_repository_context(
     selected_paths = _repository_file_candidates(tree_paths, prompt)
     if selected_paths:
         async with httpx2.AsyncClient(
-            headers=_github_headers(access_token, "application/vnd.github.raw+json"),
+            headers=(
+                _github_headers(access_token, "application/vnd.github.raw+json")
+                if repository.get("private")
+                else _github_public_headers("application/vnd.github.raw+json")
+            ),
             timeout=httpx2.Timeout(20.0, read=45.0),
             follow_redirects=False,
         ) as client:

@@ -734,6 +734,10 @@ function App() {
         body: JSON.stringify({ prompt, provider: selectedReasoningProvider || undefined }),
       })
       const result = (await response.json()) as ContextRequest & { detail?: string }
+      if (response.ok) {
+        const integrationResponse = await apiRequest(`/api/v1/workspaces/${selectedWorkspaceId}/integrations`)
+        if (integrationResponse.ok) setIntegrations((await integrationResponse.json()) as Integration[])
+      }
       if (!response.ok && response.status === 404 && result.detail === 'Workspace not found') {
         const authResponse = await apiRequest('/api/v1/auth/me')
         if (authResponse.ok) {

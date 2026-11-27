@@ -373,9 +373,7 @@ async def suggest_project_tasks(
     except ReasoningProviderLimit as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ReasoningUnavailable as exc:
-        raise HTTPException(
-            status_code=502, detail="The selected AI provider could not draft project tasks."
-        ) from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(
             status_code=503,
@@ -492,9 +490,7 @@ async def send_message(
     except ReasoningProviderLimit as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ReasoningUnavailable as exc:
-        raise HTTPException(
-            status_code=502, detail="The selected AI provider could not answer this request."
-        ) from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if answer is None:
         raise HTTPException(status_code=503, detail="The selected AI provider is not configured.")
 

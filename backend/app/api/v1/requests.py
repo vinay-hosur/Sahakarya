@@ -175,6 +175,33 @@ def _rank_key(item: RetrievedContext, prompt: str) -> tuple[float, float, str]:
     return (-score, -occurred, item.external_id)
 
 
+def _integration_failure_message(provider: str, exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    headers = getattr(response, "headers", {}) or {}
+    if provider == "github":
+        if status_code == 401:
+            return "GitHub rejected the saved token. Reconnect GitHub with a valid token."
+        if status_code == 403 and headers.get("x-ratelimit-remaining") == "0":
+            return "GitHub's API rate limit is exhausted. Wait for it to reset, then retry."
+        if status_code == 403:
+            return (
+                "GitHub denied this read. For a private repository, grant the token access "
+                "to that repository with Metadata: Read and Contents: Read."
+            )
+        if status_code == 404:
+            return (
+                "GitHub could not find that repository or file. Check the owner/repository "
+                "name and the token's repository access."
+            )
+        if isinstance(status_code, int) and status_code >= 500:
+            return f"GitHub returned HTTP {status_code}. Try the request again shortly."
+        return "SAHAKARYA could not reach GitHub. Check the connection and try again."
+    if status_code:
+        return f"The {provider} context read failed (HTTP {status_code}). Recheck its connection."
+    return f"The {provider} context source could not be reached. Recheck its connection."
+
+
 def _save_context(
     db: Session,
     integration: Integration,
@@ -312,12 +339,17 @@ async def create_request(
 
     retrieved: list[tuple[Integration, RetrievedContext]] = []
     failed_providers: list[str] = []
+    failure_details: list[str] = []
     for integration in integrations:
         if not integration.secret_ciphertext:
             integration.status = "error"
             integration.last_error = "No encrypted provider credential is available"
             integration.last_checked_at = datetime.now(UTC)
             failed_providers.append(integration.provider)
+            failure_details.append(
+                f"{integration.display_name or integration.provider}: "
+                "no saved credential is available. Reconnect it."
+            )
             continue
         try:
             access_token = decrypt_secret(integration.secret_ciphertext)
@@ -331,14 +363,22 @@ async def create_request(
             integration.last_error = "Stored provider credential could not be used"
             integration.last_checked_at = datetime.now(UTC)
             failed_providers.append(integration.provider)
+            failure_details.append(
+                f"{integration.display_name or integration.provider}: "
+                "saved credential could not be decrypted. Reconnect it."
+            )
             logger.warning(
                 "MCP context read failed provider=%s error=secret_store", integration.provider
             )
         except Exception as exc:
             integration.status = "error"
-            integration.last_error = "MCP context read failed; recheck provider authorization"
+            failure_message = _integration_failure_message(integration.provider, exc)
+            integration.last_error = failure_message
             integration.last_checked_at = datetime.now(UTC)
             failed_providers.append(integration.provider)
+            failure_details.append(
+                f"{integration.display_name or integration.provider}: {failure_message}"
+            )
             logger.warning(
                 "MCP context read failed provider=%s error_type=%s",
                 integration.provider,
@@ -372,6 +412,7 @@ async def create_request(
         )
 
     reasoning_error = False
+    reasoning_error_detail: str | None = None
     if sources:
         try:
             request.reasoning_json = await reason_over_context(
@@ -379,23 +420,28 @@ async def create_request(
             )
         except ReasoningUnavailable as exc:
             reasoning_error = True
+            reasoning_error_detail = str(exc)
             logger.warning("grounded reasoning unavailable error_type=%s", type(exc).__name__)
         except Exception as exc:
             reasoning_error = True
+            reasoning_error_detail = "The provider returned an unexpected response."
             logger.warning("grounded reasoning failed error_type=%s", type(exc).__name__)
 
     request.status = "completed" if not failed_providers or sources else "failed"
     request.completed_at = datetime.now(UTC)
     detail = None
     if not sources and failed_providers:
-        detail = (
+        detail = " ".join(failure_details) or (
             "No source returned evidence. Recheck the connected provider "
             "and its search permissions."
         )
     elif not sources:
         detail = "No matching evidence was returned by the connected sources."
     elif reasoning_error:
-        detail = "Evidence was retrieved, but grounded reasoning could not be validated."
+        detail = (
+            "Evidence was retrieved, but the AI could not produce a grounded answer. "
+            f"{reasoning_error_detail or ''}"
+        ).strip()
     elif request.reasoning_json is None:
         detail = (
             "Evidence was retrieved. Configure OPENAI_API_KEY and OPENAI_MODEL "
